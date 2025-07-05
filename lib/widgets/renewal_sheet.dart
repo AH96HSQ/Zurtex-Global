@@ -5,9 +5,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
-import 'package:zurtex/constants/api_config.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zurtex/models/vpn_account.dart';
 import 'package:zurtex/screens/home_screen.dart';
 import 'package:zurtex/utils/toast_utils.dart';
@@ -38,7 +39,6 @@ class _RenewalSheetState extends State<RenewalSheet> {
   bool messageDismissed = false;
 
   bool isUploading = false;
-  double uploadProgress = 0.0;
 
   @override
   void initState() {
@@ -48,8 +48,11 @@ class _RenewalSheetState extends State<RenewalSheet> {
 
   Future<void> fetchRenewalData() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastDomain = prefs.getString('last_working_domain');
+
       final res = await Dio().get(
-        'http://${ApiConfig.baseUrl}/api/renewal',
+        'http://$lastDomain/api/renewal',
         queryParameters: {'deviceId': deviceId},
       );
 
@@ -76,6 +79,67 @@ class _RenewalSheetState extends State<RenewalSheet> {
         isRenewalLoading = false;
       });
       Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> submitReceipt(
+    BuildContext context,
+    String base64Receipt,
+    String lastDomain,
+  ) async {
+    final uri = Uri.parse('http://$lastDomain/api/receipt');
+
+    try {
+      final response = await http
+          .post(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': '*/*',
+              'User-Agent': 'ZurtexClient/1.0',
+            },
+            body: jsonEncode({
+              "price": selectedPackage?['label'],
+              "deviceId": deviceId,
+              "receiptData": base64Receipt,
+              "gigabyte": selectedPackage?['gb'],
+              "durationInDays": selectedPackage?['days'],
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        showMyToast(
+          "رسید با موفقیت ارسال شد",
+          context,
+          backgroundColor: Colors.green,
+        );
+
+        widget.onReceiptSubmitted(
+          VpnAccount(
+            username: widget.account.username,
+            test: widget.account.test,
+            expiryTime: widget.account.expiryTime,
+            gigBytes: widget.account.gigBytes,
+            status: widget.account.status,
+            takLinks: widget.account.takLinks,
+            hasPendingReceipt: true,
+            messages: widget.account.messages,
+          ),
+        );
+
+        Navigator.of(context).pop(); // ✅ closes bottom sheet
+      } else {
+        debugPrint("❌ Server responded with: ${response.statusCode}");
+        showMyToast("خطا در ارسال رسید", context, backgroundColor: Colors.red);
+      }
+    } catch (e) {
+      debugPrint("❌ Exception during receipt upload: $e");
+      showMyToast(
+        "ارسال رسید با خطا مواجه شد",
+        context,
+        backgroundColor: Colors.red,
+      );
     }
   }
 
@@ -195,8 +259,13 @@ class _RenewalSheetState extends State<RenewalSheet> {
                         onPressed: () async {
                           setState(() => messageDismissed = true);
                           try {
+                            final prefs = await SharedPreferences.getInstance();
+                            final lastDomain = prefs.getString(
+                              'last_working_domain',
+                            );
+
                             await Dio().post(
-                              'http://${ApiConfig.baseUrl}/api/message/read',
+                              'http://$lastDomain/api/message/read',
                               data: {'deviceId': deviceId},
                               options: Options(
                                 headers: {'Content-Type': 'application/json'},
@@ -468,66 +537,21 @@ class _RenewalSheetState extends State<RenewalSheet> {
                   : () async {
                       setState(() {
                         isUploading = true;
-                        uploadProgress = 0;
                       });
 
                       try {
                         final bytes = await receiptFile!.readAsBytes();
                         final base64Receipt = base64Encode(bytes);
-
-                        final dio = Dio();
-                        final response = await dio.post(
-                          'http://${ApiConfig.baseUrl}/api/receipt',
-                          data: {
-                            "price": selectedPackage?['label'],
-                            "deviceId": deviceId,
-                            "receiptData": base64Receipt,
-                            "gigabyte": selectedPackage?['gb'], // ✅ Correct key
-                            "durationInDays":
-                                selectedPackage?['days'], // ✅ Add this key if it exists
-                          },
-                          onSendProgress: (sent, total) {
-                            if (total > 0) {
-                              setState(() {
-                                uploadProgress = sent / total;
-                              });
-                            }
-                          },
-                          options: Options(
-                            headers: {'Content-Type': 'application/json'},
-                          ),
+                        final prefs = await SharedPreferences.getInstance();
+                        final lastDomain = prefs.getString(
+                          'last_working_domain',
                         );
-                        if (response.statusCode == 200) {
-                          showMyToast(
-                            "رسید با موفقیت ارسال شد",
-                            context,
-                            backgroundColor: Colors.green,
-                          );
-                          widget.onReceiptSubmitted(
-                            VpnAccount(
-                              username: widget.account.username,
-                              test: widget.account.test,
-                              expiryTime: widget.account.expiryTime,
-                              gigBytes: widget.account.gigBytes,
-                              status: widget.account.status,
-                              takLinks: widget.account.takLinks,
-                              hasPendingReceipt: true,
-                              messages: widget
-                                  .account
-                                  .messages, // ✅ keep existing messages
-                            ),
-                          );
 
-                          Navigator.of(
-                            context,
-                          ).pop(); // ✅ closes the bottom sheet
-                        } else {
-                          showMyToast(
-                            "خطا در ارسال رسید",
-                            context,
-                            backgroundColor: Colors.red,
-                          );
-                        }
+                        await submitReceipt(
+                          context,
+                          base64Receipt,
+                          lastDomain!,
+                        );
                       } catch (e) {
                         showMyToast(
                           "خطای ارسال رسید",
@@ -552,10 +576,9 @@ class _RenewalSheetState extends State<RenewalSheet> {
                 ),
               ),
               child: isUploading
-                  ? LinearProgressIndicator(
-                      value: uploadProgress,
-                      color: Color(0xFF56A6E7),
-                      backgroundColor: Colors.white24,
+                  ? LoadingAnimationWidget.threeArchedCircle(
+                      color: Colors.white,
+                      size: 30,
                     )
                   : const Text(
                       'ثبت نهایی',

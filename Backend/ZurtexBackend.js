@@ -70,8 +70,6 @@ const logSchema = new mongoose.Schema({
 const Log = mongoose.model("Log", logSchema);
 
 const Device = mongoose.model("Device", deviceSchema);
-const messages = ["خوش آمدید!"];
-
 // Endpoint to return the VPN link for a device
 app.post("/api/approve", async (req, res) => {
   const { deviceId, upgradeId, gigabyte, durationInDays } = req.body;
@@ -209,14 +207,14 @@ app.get("/api/renewal", async (req, res) => {
       { label: "115", days: 30, gb: 30, price: 115000 },
       { label: "180", days: 30, gb: 60, price: 180000 },
       { label: "300", days: 30, gb: 120, price: 300000 },
-      { label: "200", days: 90, gb: 45, price: 200000 },
-      { label: "300", days: 90, gb: 90, price: 300000 },
-      { label: "450", days: 90, gb: 180, price: 450000 },
-      { label: "600", days: 90, gb: 240, price: 600000 },
-      { label: "360", days: 180, gb: 90, price: 360000 },
-      { label: "540", days: 180, gb: 180, price: 540000 },
-      { label: "720", days: 180, gb: 360, price: 720000 },
-      { label: "900", days: 180, gb: 480, price: 900000 },
+      // { label: "200", days: 90, gb: 45, price: 200000 },
+      // { label: "300", days: 90, gb: 90, price: 300000 },
+      // { label: "450", days: 90, gb: 180, price: 450000 },
+      // { label: "600", days: 90, gb: 240, price: 600000 },
+      // { label: "360", days: 180, gb: 90, price: 360000 },
+      // { label: "540", days: 180, gb: 180, price: 540000 },
+      // { label: "720", days: 180, gb: 360, price: 720000 },
+      // { label: "900", days: 180, gb: 480, price: 900000 },
     ];
 
     const grouped = {
@@ -231,7 +229,7 @@ app.get("/api/renewal", async (req, res) => {
       else if (pkg.days === 180) grouped["6 ماهه"].push(pkg);
     }
 
-    const cardNumber = "6037997212345678";
+    const cardNumber = "5022291543724593";
 
     // ✅ Add message logic here
     const defaultMessage = "خوش آمدید!";
@@ -319,9 +317,10 @@ app.post("/api/subscription", async (req, res) => {
       console.log(`✅ Device already exists: ${device.username}`);
     }
 
-    // ✅ Only create VPN user if device doesn't exist
     if (!device) {
-      console.log(`🆕 No existing device found. Creating new VPN user for deviceId: ${deviceId}`);
+      console.log(
+        `🆕 No existing device found. Creating new VPN user for deviceId: ${deviceId}`
+      );
       const vpnUser = await createVpnUser();
 
       if (!vpnUser) {
@@ -343,11 +342,9 @@ app.post("/api/subscription", async (req, res) => {
       console.log("💾 New device saved to DB:", device);
     }
 
-    // 🔍 Always try to look up VPN info
     vpnInfo = await findVpnUserByUsername(device.username);
     console.log("🔎 VPN info:", vpnInfo);
 
-    // ✅ Just skip update if vpnInfo is not found
     if (vpnInfo) {
       const updatedLink =
         formatSubLink(vpnInfo.latest_info?.sub_link) ||
@@ -367,15 +364,29 @@ app.post("/api/subscription", async (req, res) => {
     }
 
     const status = vpnInfo?.online_info?.status;
+    const domainList = [
+      "zurtex.net",
+      "zurtexbackend198267.xyz",
+      "zurtexbackend256934.xyz",
+      "zurtexbackend569827.xyz",
+    ];
+
+    // 🧮 Calculate remaining bytes if available
+    let usage = vpnInfo?.online_info?.usage || 0;
+    let total = vpnInfo?.latest_info?.package_size || 0;
+    let remainingBytes = total - usage;
+    if (remainingBytes < 0) remainingBytes = 0;
+
     const responsePayload = {
       username: device.username,
       test: device.test,
       expiryTime: device.expiryTime,
-      gig_byte: device.gig_byte,
+      gig_byte: remainingBytes,
       tak_links: vpnInfo?.online_info?.tak_links || [],
       status: ["expired", "active"].includes(status) ? status : "unknown",
       hasPendingReceipt: hasPendingReceipt,
-      messages,
+      domains: domainList,
+      remaining_bytes: remainingBytes, // ✅ NEW FIELD
     };
 
     console.log("📤 Responding to client with:", responsePayload);
@@ -385,6 +396,7 @@ app.post("/api/subscription", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
+
 
 app.get("/api/status", async (req, res) => {
   console.log("Status Request Received");
@@ -426,6 +438,15 @@ app.get("/api/status", async (req, res) => {
 app.post("/api/receipt", async (req, res) => {
   const { deviceId, receiptData, gigabyte, durationInDays, price } = req.body;
 
+  // ✅ Log the incoming request
+  console.log("📥 Incoming receipt upload:", {
+    deviceId,
+    gigabyte,
+    durationInDays,
+    price,
+    receiptDataLength: receiptData?.length,
+  });
+
   if (!deviceId || !receiptData) {
     return res.status(400).json({ error: "Missing deviceId or receiptData" });
   }
@@ -456,6 +477,7 @@ app.post("/api/receipt", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
+
 app.post("/api/message/read", async (req, res) => {
   const { deviceId } = req.body;
 
@@ -482,6 +504,10 @@ app.post("/api/message/read", async (req, res) => {
     console.error("❌ Failed to mark message as read:", err);
     return res.status(500).json({ error: "Server error" });
   }
+});
+app.get("/ping", (req, res) => {
+  console.log("✅ Received a ping");
+  res.send("pong");
 });
 
 //functions
@@ -600,6 +626,9 @@ async function findVpnUserByUsername(username) {
   const params = new URLSearchParams();
   params.append("username", username);
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000); // 4 sec timeout
+
   try {
     const response = await fetch(
       "https://robot.wizardxray.shop/bot/api/v1/find",
@@ -610,8 +639,11 @@ async function findVpnUserByUsername(username) {
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: params,
+        signal: controller.signal,
       }
     );
+
+    clearTimeout(timeout); // clear timeout if fetch completes
 
     const data = await response.json();
 
@@ -622,10 +654,15 @@ async function findVpnUserByUsername(username) {
 
     return data.result;
   } catch (err) {
-    console.error("❌ Fetch error during /find:", err);
+    if (err.name === 'AbortError') {
+      console.error(`⏰ Timeout while fetching user ${username}`);
+    } else {
+      console.error("❌ Fetch error during /find:", err);
+    }
     return null;
   }
 }
+
 function formatSubLink(raw) {
   const hash = raw?.split("/").pop();
   return hash ? `https://iranisystem.com/bot/sub/?hash=${hash}` : null;
@@ -707,5 +744,5 @@ getVpnStatus().then((status) => {
   }
 });
 // Start server
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, "0.0.0.0", () => console.log(`Listening on ${PORT}`));

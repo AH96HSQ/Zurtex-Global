@@ -1,110 +1,115 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:zurtex/constants/api_config.dart';
+import 'package:flutter_v2ray/flutter_v2ray.dart';
 import '../models/vpn_account.dart';
 
 class VpnService {
-  static final List<String> domainCandidates = [
-    'zurtex.net', // 🔒 HTTPS primary domain
-  ];
+  static final ValueNotifier<V2RayStatus> v2rayStatus = ValueNotifier(
+    V2RayStatus(),
+  );
 
-  /// Get VPN account (POST /api/subscription)
-  static Future<VpnAccount?> getVpnAccount(String deviceId) async {
+  static final FlutterV2ray flutterV2ray = FlutterV2ray(
+    onStatusChanged: (status) {
+      debugPrint('VPN status changed: ${status.state}');
+      v2rayStatus.value = status; // 🔁 update the notifier
+    },
+  );
+
+  static List<String> domainCandidates = ['5.78.94.88:5000'];
+
+  static const String backupVpnConfig =
+      'vless://5c686fdf-7df3-4723-ac75-fa225edd8865@zurtexbackend198267.xyz:700?encryption=none&security=none&type=tcp&headerType=http#🇹🇷 Turkey Zurtex';
+
+  static Future<void> startVpn(String configString) async {
+    final parser = FlutterV2ray.parseFromURL(configString);
+    final permissionGranted = await flutterV2ray.requestPermission();
+
+    if (!permissionGranted) throw Exception('VPN permission not granted');
+
+    await flutterV2ray.startV2Ray(
+      remark: parser.remark,
+      config: parser.getFullConfiguration(),
+      proxyOnly: false,
+    );
+
+    for (int i = 0; i < 40; i++) {
+      final status = v2rayStatus.value;
+      if (status.state == 'CONNECTED') return;
+      await Future.delayed(const Duration(milliseconds: 250));
+    }
+
+    throw Exception('VPN connection timeout');
+  }
+
+  static Future<VpnAccount?> getVpnAccount(
+    String deviceId,
+    ValueNotifier<double> progressNotifier,
+  ) async {
+    final int totalAttempts = domainCandidates.length;
+    final double step = 360 / totalAttempts;
+    progressNotifier.value = 360;
+
+    final prefs = await SharedPreferences.getInstance();
+    bool shouldRetryWithVpn = false;
+
     for (final domain in domainCandidates) {
-      final url = domain.startsWith('http')
-          ? '$domain/api/subscription'
-          : 'https://$domain/api/subscription';
-
-      debugPrint('📡 POST: $url');
+      final url = Uri.parse('http://$domain/api/subscription');
+      debugPrint('🌐 Trying subscription from: $url');
 
       try {
         final response = await http
             .post(
-              Uri.parse(url),
-              headers: {'Content-Type': 'application/json'},
+              url,
+              headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': '*/*',
+              },
               body: jsonEncode({'deviceId': deviceId}),
             )
             .timeout(const Duration(seconds: 5));
 
-        debugPrint('📶 Response: ${response.statusCode}');
-
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          ApiConfig.baseUrl = domain;
-          return VpnAccount.fromJson(data);
+          final account = VpnAccount.fromJson(data);
+          await prefs.setString('last_working_domain', domain);
+          debugPrint('✅ Subscription successful from [$domain]');
+          progressNotifier.value = 0;
+          return account;
         }
-      } on TimeoutException {
-        debugPrint('⏱ Timeout on [$domain]');
       } catch (e) {
-        debugPrint('❌ Error [$domain]: $e');
+        debugPrint('❌ Error connecting to [$domain]: $e');
+        shouldRetryWithVpn = true;
       }
+
+      progressNotifier.value -= step;
+      await Future.delayed(const Duration(seconds: 2));
     }
 
-    debugPrint('🚫 All domains failed (POST /subscription)');
-    return null;
-  }
-
-  /// Get tak_links (GET /api/status)
-  static Future<List<String>> getTakLinks() async {
-    for (final domain in domainCandidates) {
-      final url = domain.startsWith('http')
-          ? '$domain/api/status'
-          : 'https://$domain/api/status';
-
-      debugPrint('🚀 GET: $url');
-
+    // Retry with VPN
+    if (shouldRetryWithVpn) {
       try {
-        final sw = Stopwatch()..start();
-        final response = await http
-            .get(Uri.parse(url))
-            .timeout(const Duration(seconds: 5));
-        sw.stop();
+        debugPrint('🔄 Retrying with VPN...');
+        await startVpn(backupVpnConfig);
 
-        debugPrint(
-          '📶 [$domain] in ${sw.elapsedMilliseconds}ms: ${response.statusCode}',
-        );
+        final account = await getVpnAccount(deviceId, progressNotifier);
 
-        if (response.statusCode != 200) continue;
+        debugPrint('🛑 Stopping VPN after retry...');
+        await flutterV2ray.stopV2Ray();
 
-        final data = jsonDecode(response.body);
-
-        if (data is Map && data['domains'] is List) {
-          final newDomains = List<String>.from(data['domains']);
-          if (!newDomains.contains('zurtex.net')) {
-            newDomains.insert(0, 'zurtex.net');
-          }
-
-          domainCandidates
-            ..clear()
-            ..addAll(newDomains);
-
-          debugPrint('🌐 Updated domains: $domainCandidates');
-        }
-
-        if (data['tak_links'] is List) {
-          final links = List<String>.from(
-            data['tak_links'],
-          ).where((link) => link.startsWith('vless://')).toList();
-
-          ApiConfig.baseUrl = domain;
-          debugPrint('✅ Found ${links.length} tak_links');
-          return links;
-        } else {
-          debugPrint('⚠️ No tak_links in [$domain]');
-        }
-      } on TimeoutException {
-        debugPrint('⏱ Timeout [$domain]');
-      } on HandshakeException {
-        debugPrint('🔐 SSL Handshake failed [$domain]');
+        return account;
       } catch (e) {
-        debugPrint('❌ General error [$domain]: $e');
+        debugPrint('❌ VPN retry failed: $e');
+        await flutterV2ray
+            .stopV2Ray(); // make sure VPN is stopped even on error
       }
     }
 
-    debugPrint('🚫 All domains failed (GET /status)');
-    return [];
+    progressNotifier.value = 0;
+    debugPrint('❌❌ All connection attempts failed.');
+    return null;
   }
 }
