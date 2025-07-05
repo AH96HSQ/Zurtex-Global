@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -51,7 +50,25 @@ class _RenewalSheetState extends State<RenewalSheet> {
       final prefs = await SharedPreferences.getInstance();
       final lastDomain = prefs.getString('last_working_domain');
 
-      final res = await Dio().get(
+      if (lastDomain == null) {
+        debugPrint("❌ No last working domain saved");
+        showMyToast(
+          "دامنه معتبر یافت نشد",
+          context,
+          backgroundColor: Colors.red,
+        );
+        setState(() => isRenewalLoading = false);
+        return;
+      }
+
+      final dio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+        ),
+      );
+
+      final res = await dio.get(
         'http://$lastDomain/api/renewal',
         queryParameters: {'deviceId': deviceId},
       );
@@ -61,11 +78,12 @@ class _RenewalSheetState extends State<RenewalSheet> {
 
         setState(() {
           renewalData = data;
-          serverMessage = data['message']; // ✅ store the message
-          messageDismissed = false; // ✅ show it
+          serverMessage = data['message'];
+          messageDismissed = false;
           isRenewalLoading = false;
         });
       } else {
+        debugPrint("❌ Server responded with ${res.statusCode}");
         setState(() => isRenewalLoading = false);
         showMyToast(
           "در حال حاضر تمدید مسدود است",
@@ -73,11 +91,23 @@ class _RenewalSheetState extends State<RenewalSheet> {
           backgroundColor: Colors.red,
         );
       }
+    } on DioException catch (e) {
+      debugPrint("❌ Dio error: ${e.message}");
+      showMyToast(
+        "مشکل در ارتباط با سرور",
+        context,
+        backgroundColor: Colors.red,
+      );
+      setState(() => isRenewalLoading = false);
+      Navigator.of(context).pop();
     } catch (e) {
-      showMyToast("مشکل در ارتباط", context, backgroundColor: Colors.red);
-      setState(() {
-        isRenewalLoading = false;
-      });
+      debugPrint("❌ Unknown error: $e");
+      showMyToast(
+        "خطای نامشخص هنگام تمدید",
+        context,
+        backgroundColor: Colors.red,
+      );
+      setState(() => isRenewalLoading = false);
       Navigator.of(context).pop();
     }
   }
@@ -87,26 +117,31 @@ class _RenewalSheetState extends State<RenewalSheet> {
     String base64Receipt,
     String lastDomain,
   ) async {
-    final uri = Uri.parse('http://$lastDomain/api/receipt');
+    final Dio dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': '*/*',
+          'User-Agent': 'ZurtexClient/1.0',
+        },
+      ),
+    );
+
+    final uri = 'http://$lastDomain/api/receipt';
 
     try {
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': '*/*',
-              'User-Agent': 'ZurtexClient/1.0',
-            },
-            body: jsonEncode({
-              "price": selectedPackage?['label'],
-              "deviceId": deviceId,
-              "receiptData": base64Receipt,
-              "gigabyte": selectedPackage?['gb'],
-              "durationInDays": selectedPackage?['days'],
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final response = await dio.post(
+        uri,
+        data: {
+          "price": selectedPackage?['label'],
+          "deviceId": deviceId,
+          "receiptData": base64Receipt,
+          "gigabyte": selectedPackage?['gb'],
+          "durationInDays": selectedPackage?['days'],
+        },
+      );
 
       if (response.statusCode == 200) {
         showMyToast(
@@ -128,13 +163,20 @@ class _RenewalSheetState extends State<RenewalSheet> {
           ),
         );
 
-        Navigator.of(context).pop(); // ✅ closes bottom sheet
+        Navigator.of(context).pop();
       } else {
         debugPrint("❌ Server responded with: ${response.statusCode}");
         showMyToast("خطا در ارسال رسید", context, backgroundColor: Colors.red);
       }
+    } on DioException catch (e) {
+      debugPrint("❌ Dio error during receipt upload: ${e.message}");
+      showMyToast(
+        "ارسال رسید با خطا مواجه شد",
+        context,
+        backgroundColor: Colors.red,
+      );
     } catch (e) {
-      debugPrint("❌ Exception during receipt upload: $e");
+      debugPrint("❌ Unknown error: $e");
       showMyToast(
         "ارسال رسید با خطا مواجه شد",
         context,
@@ -258,22 +300,50 @@ class _RenewalSheetState extends State<RenewalSheet> {
                       TextButton(
                         onPressed: () async {
                           setState(() => messageDismissed = true);
+
                           try {
                             final prefs = await SharedPreferences.getInstance();
                             final lastDomain = prefs.getString(
                               'last_working_domain',
                             );
 
-                            await Dio().post(
+                            if (lastDomain == null) {
+                              debugPrint("❌ No last working domain available");
+                              showMyToast(
+                                "دامنه معتبر یافت نشد",
+                                context,
+                                backgroundColor: Colors.red,
+                              );
+                              return;
+                            }
+
+                            final dio = Dio(
+                              BaseOptions(
+                                connectTimeout: const Duration(seconds: 5),
+                                receiveTimeout: const Duration(seconds: 5),
+                              ),
+                            );
+
+                            await dio.post(
                               'http://$lastDomain/api/message/read',
                               data: {'deviceId': deviceId},
                               options: Options(
                                 headers: {'Content-Type': 'application/json'},
                               ),
                             );
-                          } catch (e) {
+                          } on DioException catch (e) {
+                            debugPrint(
+                              "❌ Dio error on message read: ${e.message}",
+                            );
                             showMyToast(
-                              "خطا در مخفی‌سازی پیام",
+                              "خطا در ارتباط با سرور پیام",
+                              context,
+                              backgroundColor: Colors.red,
+                            );
+                          } catch (e) {
+                            debugPrint("❌ Unexpected error: $e");
+                            showMyToast(
+                              "خطای نامشخص در مخفی‌سازی پیام",
                               context,
                               backgroundColor: Colors.red,
                             );

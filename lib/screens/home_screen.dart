@@ -1,8 +1,5 @@
 // ignore_for_file: use_build_context_synchronously
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:zurtex/services/vpn_service.dart';
 import 'package:zurtex/utils/toast_utils.dart';
@@ -228,6 +225,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final ValueNotifier<double> progressNotifier = ValueNotifier(360);
   late final String rawLabel;
   late final String staticIranConfig;
+  bool cancelRequested = false;
 
   @override
   void initState() {
@@ -360,49 +358,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!isAppActive) return null;
 
     const int maxAttempts = 3;
-    const url = 'https://www.google.com/generate_204';
+    const String url = 'https://www.google.com/generate_204';
 
-    // Create one Dio instance for this call.
     final dio = Dio(
       BaseOptions(
         connectTimeout: const Duration(seconds: 3),
         receiveTimeout: const Duration(seconds: 3),
-        // accept any status so we can handle it manually
-        validateStatus: (_) => true,
+        validateStatus: (_) => true, // Accept all statuses to handle manually
       ),
     );
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (cancelRequested) {
+        return null;
+      }
       if (!isAppActive) return null;
 
       try {
-        final sw = Stopwatch()..start();
+        final stopwatch = Stopwatch()..start();
 
         final response = await dio.get(url);
 
-        sw.stop();
+        stopwatch.stop();
 
-        // Google returns 204 for success; accept 200 as fallback
-        final ok = response.statusCode == 204 || response.statusCode == 200;
-        if (ok) return sw.elapsedMilliseconds;
+        final isSuccess =
+            response.statusCode == 204 || response.statusCode == 200;
 
-        debugPrint(
-          '❌ Unexpected status code (${response.statusCode}) on attempt $attempt',
-        );
+        if (isSuccess) {
+          return stopwatch.elapsedMilliseconds;
+        } else {
+          debugPrint(
+            '❌ Unexpected status code (${response.statusCode}) on attempt $attempt',
+          );
+        }
       } on DioException catch (e) {
         setState(() => currentTestingIndex++);
 
-        // Handle Dio-specific time-outs
         if (e.type == DioExceptionType.connectionTimeout ||
             e.type == DioExceptionType.receiveTimeout) {
           debugPrint('⏱ Timeout on attempt $attempt');
         } else {
-          debugPrint('❌ Dio error on attempt $attempt: $e');
+          debugPrint('❌ Dio error on attempt $attempt: ${e.message}');
         }
       } catch (e) {
-        debugPrint('❌ Ping attempt $attempt failed: $e');
+        debugPrint('❌ General error on attempt $attempt: $e');
       }
     }
+
     return null; // All attempts failed
   }
 
@@ -434,6 +436,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // 4. Attempt each config in order
     for (int i = 0; i < sortedConfigs.length; i++) {
+      if (cancelRequested) {
+        return false;
+      }
       final config = sortedConfigs[i];
       final parser = FlutterV2ray.parseFromURL(config);
 
@@ -477,6 +482,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   int ipFetchRetryCount = 0;
+
   void fetchCurrentIpInfo() async {
     if (isFetchingIp) return;
 
@@ -484,29 +490,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isFetchingIp = true;
     });
 
-    final url = 'https://ipwho.is/';
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 2),
+        receiveTimeout: const Duration(seconds: 2),
+      ),
+    );
 
+    final url = 'https://ipwho.is/';
     int attempt = 0;
     String? resolvedCountry;
 
     while (true) {
       try {
-        final res = await http
-            .get(Uri.parse(url))
-            .timeout(const Duration(seconds: 2));
+        final response = await dio.get(url);
 
-        if (res.statusCode == 200) {
-          final data = jsonDecode(res.body);
+        if (response.statusCode == 200 && response.data != null) {
+          final data = response.data;
           final code = isConnected ? data['country'] : data['country_code'];
           final name = countryCodeToPersian[code] ?? code;
 
           resolvedCountry = name;
           break;
         } else {
-          debugPrint("❌ API Error: ${res.statusCode}");
+          debugPrint("❌ API Error: ${response.statusCode}");
         }
+      } on DioException catch (e) {
+        debugPrint("❌ Dio error on attempt ${attempt + 1}: ${e.message}");
       } catch (e) {
-        debugPrint("❌ IP Lookup Error on attempt ${attempt + 1}: $e");
+        debugPrint("❌ General error on attempt ${attempt + 1}: $e");
       }
 
       attempt++;
@@ -517,7 +529,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         break;
       }
 
-      // Wait before next attempt
       await Future.delayed(const Duration(milliseconds: 1500));
     }
 
@@ -798,6 +809,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> initializeVpnConfigs() async {
     try {
       setState(() {
+        loadingMessage = 'بررسی اتصال اینترنت';
+      });
+
+      final pingTime = await checkInternetWithPing();
+      if (pingTime == null) {
+        setState(() {
+          loadingMessage = 'اینترنت متصل نیست';
+        });
+        return;
+      }
+
+      setState(() {
         loadingMessage = 'ارتباط با سرور';
       });
 
@@ -805,21 +828,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final result = await VpnService.getVpnAccount(deviceId, progressNotifier);
       if (result == null) throw Exception('دریافت اطلاعات حساب ناموفق بود');
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('lastVpnUsername', result.username);
       setState(() {
         account = result;
         subscriptionStatus = result.status;
-        if (subscriptionStatus == "expired") {
+        if (subscriptionStatus == "expired" ||
+            subscriptionStatus == "unknown") {
           selectedDropdownOption = 'ایران'; // force Iran for expired users
         }
-        // ⬅️ No more `.onlineInfo?.status`
       });
 
-      final links = [
-        ...result.takLinks,
-        staticIranConfig, // manually injected static config
-      ];
+      final links = [...result.takLinks, staticIranConfig];
+
       final validConfigs = links.where((config) {
         final label = getServerLabel(config).trim();
         return label.isNotEmpty && label != 'Bad Config' && label != '..';
@@ -828,6 +850,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final newSelected = validConfigs.contains(selectedConfig)
           ? selectedConfig
           : (validConfigs.isNotEmpty ? validConfigs.first : null);
+
       if (newSelected != null) {
         final parser = FlutterV2ray.parseFromURL(newSelected);
         await resetVpnWithRealConfig(
@@ -835,11 +858,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'reset-step',
         );
       }
-      //startContinuousAllPings(account?.takLinks ?? []);
+
       setState(() {
         vpnConfigs = validConfigs;
         selectedConfig = newSelected;
-        //getAllServerPingsOnce(validConfigs); // fire-and-forget
       });
     } catch (e) {
       debugPrint("❌ Subscription fetch failed: $e");
@@ -931,7 +953,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               height: 155,
                               color: isConnected
                                   ? Colors.green
-                                  : subscriptionStatus == 'expired'
+                                  : subscriptionStatus == 'expired' ||
+                                        subscriptionStatus == 'unknown'
                                   ? Colors.red
                                   : const Color(
                                       0xFF56A6E7,
@@ -1006,8 +1029,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     child: ValueListenableBuilder<bool>(
                                       valueListenable: dropdownOpenNotifier,
                                       builder: (context, isOpen, _) {
-                                        debugPrint(selectedDropdownOption);
-                                        debugPrint(selectedConfig);
                                         return Container(
                                           width: 310,
                                           height: 65,
@@ -1036,14 +1057,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                           TextOverflow.ellipsis,
                                                     )
                                                   : isCheckingConnection
-                                                  ? Row(
-                                                      children: [
-                                                        Expanded(
-                                                          child:
-                                                              buildServerProgressBar(), // ✅ your widget
-                                                        ),
-                                                      ],
-                                                    )
+                                                  ? cancelRequested
+                                                        ? const Text(
+                                                            'در حال لغو اتصال',
+                                                            style: TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontSize: 18,
+                                                            ),
+                                                            textDirection:
+                                                                TextDirection
+                                                                    .rtl,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                          )
+                                                        : Row(
+                                                            children: [
+                                                              Expanded(
+                                                                child:
+                                                                    buildServerProgressBar(), // ✅ your widget
+                                                              ),
+                                                            ],
+                                                          )
                                                   : isConnected
                                                   ? Padding(
                                                       padding:
@@ -1147,7 +1183,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     "ایران",
                                   );
 
-                                  if (subscriptionStatus == 'expired' &&
+                                  if ((subscriptionStatus == 'expired' ||
+                                          subscriptionStatus == 'unknown') &&
                                       !isIranServer) {
                                     showMyToast(
                                       "لطفاً از دکمه تمدید استفاده کنید",
@@ -1157,115 +1194,114 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     return;
                                   }
 
-                                  if (!isCheckingConnection) {
-                                    if (!isConnected) {
-                                      setState(() {
-                                        isCheckingConnection = true;
-                                      });
+                                  // 🔁 Allow canceling the connection while it's in progress
+                                  if (isCheckingConnection) {
+                                    setState(() {
+                                      cancelRequested = true;
+                                    });
+                                    debugPrint('🛑 Cancel requested');
+                                    return;
+                                  }
 
-                                      bool success = false;
-                                      final currentContext = context;
+                                  if (!isConnected) {
+                                    setState(() {
+                                      isCheckingConnection = true;
+                                      cancelRequested = false;
+                                    });
 
-                                      // ✅ AUTO CONNECT
-                                      if (selectedDropdownOption == "auto") {
-                                        success = await autoConnect();
+                                    bool success = false;
+                                    final currentContext = context;
+
+                                    if (selectedDropdownOption == "auto") {
+                                      success = await autoConnect();
+                                    } else {
+                                      final parser = FlutterV2ray.parseFromURL(
+                                        selectedConfig!,
+                                      );
+
+                                      final hasPermission = await flutterV2ray
+                                          .requestPermission();
+                                      if (!hasPermission || cancelRequested) {
+                                        setState(
+                                          () => isCheckingConnection = false,
+                                        );
+                                        return;
                                       }
-                                      // ✅ CONNECT TO SELECTED CONFIG
-                                      else {
-                                        final parser =
-                                            FlutterV2ray.parseFromURL(
-                                              selectedConfig!,
-                                            );
 
-                                        final hasPermission = await flutterV2ray
-                                            .requestPermission();
-                                        if (!hasPermission) {
+                                      await flutterV2ray.startV2Ray(
+                                        remark: parser.remark,
+                                        config: parser.getFullConfiguration(),
+                                        proxyOnly: false,
+                                      );
+
+                                      // Wait for connection or cancellation
+                                      while (true) {
+                                        if (cancelRequested) {
+                                          debugPrint(
+                                            "🛑 Cancelled by user before connect",
+                                          );
+                                          await flutterV2ray.stopV2Ray();
                                           setState(
                                             () => isCheckingConnection = false,
                                           );
                                           return;
                                         }
-
-                                        await flutterV2ray.startV2Ray(
-                                          remark: parser.remark,
-                                          config: parser.getFullConfiguration(),
-                                          proxyOnly: false,
+                                        final status = v2rayStatus.value;
+                                        if (status.state == 'CONNECTED') break;
+                                        await Future.delayed(
+                                          const Duration(milliseconds: 100),
                                         );
-                                        const Duration(milliseconds: 1000);
-
-                                        // wait until V2Ray reports CONNECTED
-                                        while (true) {
-                                          final status = v2rayStatus.value;
-                                          if (status.state == 'CONNECTED') {
-                                            break;
-                                          }
-                                          await Future.delayed(
-                                            const Duration(milliseconds: 100),
-                                          );
-                                        }
-
-                                        ping = await checkInternetWithPing();
-                                        if (ping != null) {
-                                          success = true;
-                                        }
                                       }
 
-                                      if (success) {
-                                        setState(() {
-                                          isConnected = true;
-                                          isCheckingConnection = false;
-                                        });
-
-                                        startConnectionMonitor();
-                                        fetchCurrentIpInfo();
-
-                                        // ✅ Save selectedConfig if it's not null
-                                        if (selectedConfig != null) {
-                                          final prefs =
-                                              await SharedPreferences.getInstance();
-                                          await prefs.setString(
-                                            'last_working_config',
-                                            selectedConfig!,
-                                          );
-                                        }
-                                      } else {
-                                        if (selectedDropdownOption == "auto") {
-                                          if (mounted) {
-                                            showMyToast(
-                                              "هیچ سروری متصل نشد. لطفا سرور ها را بازرسانی کرده یا با پشتیبانی تماس بگیرید.",
-                                              currentContext,
-                                              backgroundColor: Colors.red,
-                                            );
-                                          }
-                                        } else {
-                                          if (mounted) {
-                                            showMyToast(
-                                              "اتصال برقرار نشد. لطفا سرور دیگری انتخاب کنید.",
-                                              currentContext,
-                                              backgroundColor: Colors.red,
-                                            );
-                                          }
-                                        }
-
-                                        await flutterV2ray.stopV2Ray();
-
-                                        setState(() {
-                                          isConnected = false;
-                                          isCheckingConnection = false;
-                                        });
-                                        fetchCurrentIpInfo();
+                                      if (!cancelRequested) {
+                                        ping = await checkInternetWithPing();
+                                        success = ping != null;
                                       }
                                     }
-                                    // 🔴 Already connected → disconnect
-                                    else {
-                                      await flutterV2ray.stopV2Ray();
-                                      stopConnectionMonitor();
 
+                                    if (success && !cancelRequested) {
+                                      setState(() {
+                                        isConnected = true;
+                                        isCheckingConnection = false;
+                                      });
+
+                                      startConnectionMonitor();
+                                      fetchCurrentIpInfo();
+
+                                      if (selectedConfig != null) {
+                                        final prefs =
+                                            await SharedPreferences.getInstance();
+                                        await prefs.setString(
+                                          'last_working_config',
+                                          selectedConfig!,
+                                        );
+                                      }
+                                    } else {
+                                      await flutterV2ray.stopV2Ray();
                                       setState(() {
                                         isConnected = false;
+                                        isCheckingConnection = false;
                                       });
                                       fetchCurrentIpInfo();
+
+                                      if (!cancelRequested) {
+                                        showMyToast(
+                                          selectedDropdownOption == "auto"
+                                              ? "هیچ سروری متصل نشد. لطفا سرور ها را بازرسانی کرده یا با پشتیبانی تماس بگیرید."
+                                              : "اتصال برقرار نشد. لطفا سرور دیگری انتخاب کنید.",
+                                          currentContext,
+                                          backgroundColor: Colors.red,
+                                        );
+                                      }
                                     }
+                                  } else {
+                                    await flutterV2ray.stopV2Ray();
+                                    stopConnectionMonitor();
+
+                                    setState(() {
+                                      isConnected = false;
+                                    });
+                                    fetchCurrentIpInfo();
                                   }
                                 },
                                 child: Container(
@@ -1274,7 +1310,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   decoration: BoxDecoration(
                                     color: isConnected
                                         ? Colors.green
-                                        : subscriptionStatus == 'expired'
+                                        : subscriptionStatus == 'expired' ||
+                                              subscriptionStatus == 'unknown'
                                         ? Colors.red
                                         : const Color(
                                             0xFF56A6E7,
@@ -1339,7 +1376,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         decoration: BoxDecoration(
                                           color: isConnected
                                               ? Colors.green
-                                              : subscriptionStatus == 'expired'
+                                              : subscriptionStatus ==
+                                                        'expired' ||
+                                                    subscriptionStatus ==
+                                                        'unknown'
                                               ? Colors.red
                                               : const Color(
                                                   0xFF56A6E7,
@@ -1504,7 +1544,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     future: _getAppVersion(),
                     builder: (context, snapshot) {
                       final version = snapshot.data ?? '';
-                      final user = account?.username ?? '---';
+                      final user = account?.username ?? username ?? '---';
                       return Text(
                         'V$version  $user',
                         style: const TextStyle(
@@ -1558,7 +1598,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ),
                             ),
                             const SizedBox(height: 30),
-                            if (loadingMessage != 'خطا در دریافت اطلاعات')
+                            if (loadingMessage != 'خطا در دریافت اطلاعات' &&
+                                loadingMessage != 'اینترنت متصل نیست')
                               Center(
                                 child: LoadingAnimationWidget.threeArchedCircle(
                                   color: Colors.white,
@@ -1570,7 +1611,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
 
                       // Bottom actions
-                      if (loadingMessage == 'خطا در دریافت اطلاعات')
+                      if (loadingMessage == 'خطا در دریافت اطلاعات' ||
+                          loadingMessage == 'اینترنت متصل نیست')
                         Positioned(
                           bottom: 20,
                           left: 0,
@@ -1678,7 +1720,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   future: _getAppVersion(),
                                   builder: (context, snapshot) {
                                     final version = snapshot.data ?? '';
-                                    final user = account?.username ?? '---';
+                                    final user =
+                                        account?.username ?? username ?? '---';
                                     return Text(
                                       'V$version  $user',
                                       style: const TextStyle(

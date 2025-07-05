@@ -55,56 +55,68 @@ class VpnService {
     final prefs = await SharedPreferences.getInstance();
     bool shouldRetryWithVpn = false;
 
-    for (final domain in domainCandidates) {
-      final url = Uri.parse('http://$domain/api/subscription');
-      debugPrint('🌐 Trying subscription from: $url');
+    Future<VpnAccount?> attemptConnection() async {
+      for (final domain in domainCandidates) {
+        final url = Uri.parse('http://$domain/api/subscription');
+        debugPrint('🌐 Trying subscription from: $url');
 
-      try {
-        final response = await http
-            .post(
-              url,
-              headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0',
-                'Accept': '*/*',
-              },
-              body: jsonEncode({'deviceId': deviceId}),
-            )
-            .timeout(const Duration(seconds: 5));
+        try {
+          final response = await http
+              .post(
+                url,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'Mozilla/5.0',
+                  'Accept': '*/*',
+                },
+                body: jsonEncode({'deviceId': deviceId}),
+              )
+              .timeout(const Duration(seconds: 5));
 
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final account = VpnAccount.fromJson(data);
-          await prefs.setString('last_working_domain', domain);
-          debugPrint('✅ Subscription successful from [$domain]');
-          progressNotifier.value = 0;
-          return account;
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            final account = VpnAccount.fromJson(data);
+            await prefs.setString('last_working_domain', domain);
+            debugPrint('✅ Subscription successful from [$domain]');
+            progressNotifier.value = 0;
+            return account;
+          }
+        } catch (e) {
+          debugPrint('❌ Error connecting to [$domain]: $e');
+          shouldRetryWithVpn = true;
         }
-      } catch (e) {
-        debugPrint('❌ Error connecting to [$domain]: $e');
-        shouldRetryWithVpn = true;
+
+        progressNotifier.value -= step;
+        await Future.delayed(const Duration(seconds: 2));
       }
 
-      progressNotifier.value -= step;
-      await Future.delayed(const Duration(seconds: 2));
+      return null;
     }
 
-    // Retry with VPN
+    // 🔹 Stage 1: direct
+    final directResult = await attemptConnection();
+    if (directResult != null) return directResult;
+
+    // 🔹 Stage 2: with VPN
     if (shouldRetryWithVpn) {
       try {
         debugPrint('🔄 Retrying with VPN...');
         await startVpn(backupVpnConfig);
 
-        final account = await getVpnAccount(deviceId, progressNotifier);
+        final vpnResult = await attemptConnection();
 
         debugPrint('🛑 Stopping VPN after retry...');
         await flutterV2ray.stopV2Ray();
 
-        return account;
+        if (vpnResult != null) return vpnResult;
+
+        // 🔹 Stage 3: retry again after VPN disconnected
+        debugPrint('🔁 Final retry after VPN disconnection...');
+        final finalResult = await attemptConnection();
+        return finalResult;
       } catch (e) {
         debugPrint('❌ VPN retry failed: $e');
-        await flutterV2ray
-            .stopV2Ray(); // make sure VPN is stopped even on error
+        await flutterV2ray.stopV2Ray();
       }
     }
 

@@ -1,9 +1,25 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized(); // ✅ this must come first
-  runApp(const MyApp());
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details); // Still logs to console
+        // Optionally send to analytics or crash reporting
+      };
+
+      runApp(const MyApp());
+    },
+    (Object error, StackTrace stack) {
+      // Handle all uncaught async errors here
+      debugPrint('🔴 Caught in runZonedGuarded: $error');
+      // Optionally log or report this too
+    },
+  );
 }
 
 class MyApp extends StatelessWidget {
