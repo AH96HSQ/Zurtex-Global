@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:zurtex/models/vpn_account.dart';
 import 'package:zurtex/screens/home_screen.dart';
 import 'package:zurtex/utils/toast_utils.dart';
+import 'package:zurtex/widgets/package_selector.dart';
 // import 'package:zurtex/utils/toast_utils.dart'; // adjust if your package name differs
 
 class RenewalSheet extends StatefulWidget {
@@ -29,20 +30,46 @@ class RenewalSheet extends StatefulWidget {
 
 class _RenewalSheetState extends State<RenewalSheet> {
   String selectedTier = '1 ماهه';
-  Map<String, dynamic>? selectedPackage;
   File? receiptFile;
   String? deviceId;
   bool isRenewalLoading = true;
   Map<String, dynamic>? renewalData;
   String? serverMessage;
   bool messageDismissed = false;
-
+  int selectedDays = 30;
+  int selectedGB = 30;
   bool isUploading = false;
+  int serverProvidedDayPrice = 750;
+  int serverProvidedGbPrice = 3500;
+  String? remainingGB;
+  int? remainingDays;
+  bool isImageUnsupported = false;
 
   @override
   void initState() {
     super.initState();
     fetchDeviceId();
+    remainingGB = (widget.account.gigBytes / (1024 * 1024 * 1024))
+        .toStringAsFixed(0);
+    remainingDays = DateTime.fromMillisecondsSinceEpoch(
+      widget.account.expiryTime * 1000,
+    ).difference(DateTime.now()).inDays;
+  }
+
+  String formatWithSpaces(int number) {
+    final str = number.toString();
+    final buffer = StringBuffer();
+
+    int count = 0;
+    for (int i = str.length - 1; i >= 0; i--) {
+      buffer.write(str[i]);
+      count++;
+      if (count % 3 == 0 && i != 0) {
+        buffer.write(',');
+      }
+    }
+
+    return buffer.toString().split('').reversed.join();
   }
 
   Future<void> fetchRenewalData() async {
@@ -79,6 +106,8 @@ class _RenewalSheetState extends State<RenewalSheet> {
         setState(() {
           renewalData = data;
           serverMessage = data['message'];
+          serverProvidedDayPrice = data['pricePerDay'] ?? 400;
+          serverProvidedGbPrice = data['pricePerGB'] ?? 3000;
           messageDismissed = false;
           isRenewalLoading = false;
         });
@@ -132,14 +161,18 @@ class _RenewalSheetState extends State<RenewalSheet> {
     final uri = 'http://$lastDomain/api/receipt';
 
     try {
+      final int totalPrice =
+          (selectedDays * serverProvidedDayPrice) +
+          (selectedGB * serverProvidedGbPrice);
+
       final response = await dio.post(
         uri,
         data: {
-          "price": selectedPackage?['label'],
           "deviceId": deviceId,
           "receiptData": base64Receipt,
-          "gigabyte": selectedPackage?['gb'],
-          "durationInDays": selectedPackage?['days'],
+          "gigabyte": selectedGB,
+          "durationInDays": selectedDays,
+          "price": totalPrice,
         },
       );
 
@@ -206,10 +239,6 @@ class _RenewalSheetState extends State<RenewalSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final List<Map<String, dynamic>> tierPackages =
-        List<Map<String, dynamic>>.from(
-          renewalData?['packages']?[selectedTier] ?? [],
-        );
     if (isRenewalLoading) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -254,6 +283,7 @@ class _RenewalSheetState extends State<RenewalSheet> {
         ),
       );
     }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -308,12 +338,23 @@ class _RenewalSheetState extends State<RenewalSheet> {
                             );
 
                             if (lastDomain == null) {
-                              debugPrint("❌ No last working domain available");
+                              debugPrint("❌ No last working domain saved");
                               showMyToast(
                                 "دامنه معتبر یافت نشد",
                                 context,
                                 backgroundColor: Colors.red,
                               );
+                              setState(() => isRenewalLoading = false);
+                              return;
+                            }
+
+                            if (deviceId == null) {
+                              showMyToast(
+                                "شناسه دستگاه یافت نشد",
+                                context,
+                                backgroundColor: Colors.red,
+                              );
+                              setState(() => isRenewalLoading = false);
                               return;
                             }
 
@@ -364,135 +405,57 @@ class _RenewalSheetState extends State<RenewalSheet> {
               ),
 
             // Tiers
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              textDirection: TextDirection.rtl, // ✅ force LTR layout
-
-              children:
-                  (renewalData?['packages']?.keys.toList().cast<String>() ?? [])
-                      .map<Widget>((tier) {
-                        return Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            child: ChoiceChip(
-                              label: SizedBox(
-                                width: double.infinity,
-                                child: Directionality(
-                                  textDirection: TextDirection.rtl,
-                                  child: Text(
-                                    tier,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                              labelPadding: const EdgeInsets.symmetric(
-                                horizontal: 0,
-                              ),
-                              selected: selectedTier == tier,
-                              selectedColor: const Color(0xFF56A6E7),
-                              backgroundColor: const Color(0xFF2A2A2A),
-                              showCheckmark: false,
-                              side: BorderSide.none,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              onSelected: (_) {
-                                setState(() {
-                                  selectedTier = tier;
-                                  selectedPackage = null;
-                                });
-                              },
-                            ),
-                          ),
-                        );
-                      })
-                      .toList(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text(
+                  'در حساب شما $remainingGB گیگابایت و $remainingDays روز مانده\nچقدر به حسابتون اضافه بشه؟',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ),
+            ),
+            const SizedBox(height: 15),
+            PackageSelector(
+              pricePerDay: serverProvidedDayPrice,
+              pricePerGB: serverProvidedGbPrice,
+              onChanged: (d, g) {
+                setState(() {
+                  selectedDays = d;
+                  selectedGB = g;
+                });
+              },
             ),
             const SizedBox(height: 10),
-
-            // Packages
-            Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.stretch, // ensures full width
-              children: tierPackages.map((pkg) {
-                final isSelected = selectedPackage?['label'] == pkg['label'];
-                final int gb = pkg['gb'] ?? 0;
-
-                return InkWell(
-                  onTap: () => setState(() => selectedPackage = pkg),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? const Color(0xFF56A6E7)
-                          : const Color(0xFF2A2A2A),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    margin: const EdgeInsets.symmetric(
-                      vertical: 3,
-                      horizontal: 4,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 15,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      textDirection: TextDirection.rtl, // full RTL layout
-                      children: [
-                        // 👈 Left side (in RTL): gigabyte amount
-                        Directionality(
-                          textDirection: TextDirection.rtl,
-                          child: Text(
-                            '${gb.toString().padLeft(3, '0')} گیگابایت',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 17,
-                            ),
-                          ),
-                        ),
-
-                        // 👉 Right side (in RTL): price
-                        Directionality(
-                          textDirection: TextDirection.rtl,
-                          child: Text(
-                            '${pkg['label'] ?? ''} هزار تومان',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 17,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text(
+                  'لطفاً مبلغ ${formatWithSpaces(selectedDays.toInt() * serverProvidedDayPrice + selectedGB.toInt() * serverProvidedGbPrice)} تومان کارت به کارت کنید.',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 50),
 
             GestureDetector(
-              onTap: selectedPackage == null ? null : pickReceipt,
+              onTap: pickReceipt,
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                ), // 👈 adjust as needed
+                padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: Row(
                   children: [
-                    // 📤 Upload/Preview Container (flex = 1)
+                    // 📤 Upload/Preview Container
                     Expanded(
                       flex: 1,
                       child: Stack(
                         children: [
-                          // 🟦 Main container with image or text
                           Container(
-                            height: 160,
+                            height: 200,
                             decoration: BoxDecoration(
-                              color:
-                                  selectedPackage == null || receiptFile != null
+                              color: receiptFile != null
                                   ? const Color(0xFF2A2A2A)
                                   : const Color(0xFF56A6E7),
                               borderRadius: BorderRadius.circular(12),
@@ -502,32 +465,63 @@ class _RenewalSheetState extends State<RenewalSheet> {
                               horizontal: 35,
                               vertical: 15,
                             ),
-                            child:
-                                receiptFile != null && selectedPackage != null
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: Image.file(
-                                      receiptFile!,
-                                      height: 300,
-                                      fit: BoxFit.cover,
-                                      width: double.infinity,
-                                    ),
-                                  )
-                                : Text(
-                                    selectedPackage == null
-                                        ? 'اول یک بسته را انتخاب کنید'
-                                        : 'برای بارگذاری رسید کلیک کنید',
-                                    style: const TextStyle(
+                            child: Builder(
+                              builder: (context) {
+                                if (receiptFile == null) {
+                                  isImageUnsupported = false;
+                                  return const Text(
+                                    'برای بارگذاری رسید کلیک کنید',
+                                    style: TextStyle(
                                       color: Colors.white,
                                       fontSize: 18,
                                     ),
                                     textDirection: TextDirection.rtl,
                                     textAlign: TextAlign.center,
+                                  );
+                                }
+
+                                if (receiptFile!.path.toLowerCase().endsWith(
+                                  '.svg',
+                                )) {
+                                  isImageUnsupported = true;
+                                  return const Text(
+                                    'فرمت تصویر پشتیبانی نمی‌شود',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                    ),
+                                    textDirection: TextDirection.rtl,
+                                    textAlign: TextAlign.center,
+                                  );
+                                }
+
+                                isImageUnsupported = false;
+                                return ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.file(
+                                    receiptFile!,
+                                    height: 300,
+                                    fit: BoxFit.cover,
+                                    width: double.infinity,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return const Text(
+                                        'نمایش تصویر با خطا مواجه شد',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                        ),
+                                        textDirection: TextDirection.rtl,
+                                        textAlign: TextAlign.center,
+                                      );
+                                    },
                                   ),
+                                );
+                              },
+                            ),
                           ),
 
-                          // ❌ Close icon positioned over the container (top-right)
-                          if (receiptFile != null && selectedPackage != null)
+                          // ❌ Close icon
+                          if (receiptFile != null)
                             Positioned(
                               top: 4,
                               right: 4,
@@ -535,6 +529,7 @@ class _RenewalSheetState extends State<RenewalSheet> {
                                 onTap: () {
                                   setState(() {
                                     receiptFile = null;
+                                    isImageUnsupported = false;
                                   });
                                 },
                                 child: Container(
@@ -555,7 +550,8 @@ class _RenewalSheetState extends State<RenewalSheet> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // 📋 Copy Card Number Container
+
+                    // 📋 Copy Card Number
                     Expanded(
                       flex: 1,
                       child: GestureDetector(
@@ -567,26 +563,64 @@ class _RenewalSheetState extends State<RenewalSheet> {
                           );
                           // showMyToast(...);
                         },
-                        child: Container(
-                          height: 160,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2A2A2A),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          alignment: Alignment.center,
-                          padding: const EdgeInsets.symmetric(horizontal: 35),
-                          child: Text(
-                            (renewalData?['cardNumber'] as String?)
-                                    ?.replaceAllMapped(
-                                      RegExp(r'.{1,4}'),
-                                      (match) => '${match.group(0)}\n',
-                                    )
-                                    .trim() ??
-                                '',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white, fontSize: 18),
-                            textDirection: TextDirection.rtl,
-                          ),
+                        child: Stack(
+                          clipBehavior: Clip.none, // Allows overlap
+                          children: [
+                            // 📋 Main card container
+                            Container(
+                              height: 200,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2A2A2A),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              alignment: Alignment.center,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 35,
+                              ),
+                              child: Text(
+                                (renewalData?['cardNumber'] as String?)
+                                        ?.replaceAllMapped(
+                                          RegExp(r'.{1,4}'),
+                                          (match) => '${match.group(0)}\n',
+                                        )
+                                        .trim() ??
+                                    '',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 22,
+                                ),
+                                textDirection: TextDirection.rtl,
+                              ),
+                            ),
+
+                            // 🏷️ Overlapping label
+                            Positioned(
+                              top: -12, // overlaps above the main container
+                              right: 40, // you can tweak this
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(
+                                    0xFF56A6E7,
+                                  ), // your accent color
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  'شماره کارت',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textDirection: TextDirection.rtl,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -594,15 +628,14 @@ class _RenewalSheetState extends State<RenewalSheet> {
                 ),
               ),
             ),
-
             const SizedBox(height: 15),
 
             ElevatedButton(
               onPressed:
-                  selectedPackage == null ||
-                      receiptFile == null ||
+                  receiptFile == null ||
                       deviceId == null ||
-                      isUploading
+                      isUploading ||
+                      isImageUnsupported
                   ? null
                   : () async {
                       setState(() {
@@ -612,17 +645,19 @@ class _RenewalSheetState extends State<RenewalSheet> {
                       try {
                         final bytes = await receiptFile!.readAsBytes();
                         final base64Receipt = base64Encode(bytes);
+
                         final prefs = await SharedPreferences.getInstance();
                         final lastDomain = prefs.getString(
                           'last_working_domain',
                         );
 
-                        await submitReceipt(
-                          context,
-                          base64Receipt,
-                          lastDomain!,
-                        );
+                        if (lastDomain == null) {
+                          throw Exception("No last working domain saved.");
+                        }
+
+                        await submitReceipt(context, base64Receipt, lastDomain);
                       } catch (e) {
+                        debugPrint("❌ Upload error: $e");
                         showMyToast(
                           "خطای ارسال رسید",
                           context,
@@ -633,14 +668,11 @@ class _RenewalSheetState extends State<RenewalSheet> {
                       }
                     },
               style: ButtonStyle(
-                backgroundColor: WidgetStateProperty.resolveWith<Color>((
-                  states,
-                ) {
-                  if (states.contains(WidgetState.disabled)) {
-                    return const Color(0xFF2A2A2A);
-                  }
-                  return const Color(0xFF56A6E7);
-                }),
+                backgroundColor: WidgetStateProperty.resolveWith<Color>(
+                  (states) => states.contains(WidgetState.disabled)
+                      ? const Color(0xFF2A2A2A)
+                      : const Color(0xFF56A6E7),
+                ),
                 minimumSize: WidgetStateProperty.all(
                   const Size(double.infinity, 50),
                 ),
@@ -651,7 +683,7 @@ class _RenewalSheetState extends State<RenewalSheet> {
                       size: 30,
                     )
                   : const Text(
-                      'ثبت نهایی',
+                      'ارسال رسید',
                       style: TextStyle(color: Colors.white, fontSize: 18),
                     ),
             ),

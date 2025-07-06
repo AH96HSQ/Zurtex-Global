@@ -7,6 +7,8 @@ class VpnAccount {
   final List<String> takLinks;
   final bool hasPendingReceipt;
   final List<String> messages;
+  final String? latestVersion; // ✅ NEW
+  final String? updateUrl; // ✅ NEW
 
   VpnAccount({
     required this.username,
@@ -17,6 +19,8 @@ class VpnAccount {
     required this.takLinks,
     required this.hasPendingReceipt,
     required this.messages,
+    this.latestVersion,
+    this.updateUrl,
   });
 
   factory VpnAccount.fromJson(Map<String, dynamic> json) {
@@ -29,6 +33,8 @@ class VpnAccount {
       takLinks: List<String>.from(json['tak_links'] ?? []),
       hasPendingReceipt: json['hasPendingReceipt'] ?? false,
       messages: List<String>.from(json['messages'] ?? []),
+      latestVersion: json['latestVersion'], // ✅ Parse new field
+      updateUrl: json['updateUrl'], // ✅ Parse new field
     );
   }
 

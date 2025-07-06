@@ -18,10 +18,14 @@ class VpnService {
     },
   );
 
-  static List<String> domainCandidates = ['5.78.94.88:5000'];
+  static List<String> domainCandidates = [
+    'zurtexbackend569827.xyz',
+    'zurtexbackend198267.xyz',
+    'zurtexbackend256934.xyz',
+  ];
 
   static const String backupVpnConfig =
-      'vless://5c686fdf-7df3-4723-ac75-fa225edd8865@zurtexbackend198267.xyz:700?encryption=none&security=none&type=tcp&headerType=http#🇹🇷 Turkey Zurtex';
+      'vless://5c686fdf-7df3-4723-ac75-fa225edd8865@45.136.5.30:700?encryption=none&security=none&type=tcp&headerType=http#Emergency%20Zurtex%20Connection';
 
   static Future<void> startVpn(String configString) async {
     final parser = FlutterV2ray.parseFromURL(configString);

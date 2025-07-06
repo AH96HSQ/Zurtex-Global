@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:zurtex/services/vpn_service.dart';
 import 'package:zurtex/utils/toast_utils.dart';
+import 'package:zurtex/widgets/pulsating_update.dart';
 import '../services/vpn_utils.dart';
 import 'package:flutter_v2ray/flutter_v2ray.dart'; // ✅ ADD THIS
 import 'dart:async';
@@ -232,9 +233,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     rawLabel = '🇮🇷 Iran - Zurtex';
     staticIranConfig =
-        'vless://cde304d3-37f5-4f3c-aea5-de73a9305078@zurtexbackend256934.xyz:700'
+        'vless://cde304d3-37f5-4f3c-aea5-de73a9305078@45.138.132.39:700'
         '?security=none&type=tcp&headerType=http&path=%2F&host=rubika.ir,skyroom.online'
         '#${Uri.encodeComponent(rawLabel)}';
+
     selectedConfig = staticIranConfig; // ✅ initialize here
     WidgetsBinding.instance.addObserver(this);
     getCachedUsername().then((value) {
@@ -834,10 +836,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         account = result;
         subscriptionStatus = result.status;
-        if (subscriptionStatus == "expired" ||
-            subscriptionStatus == "unknown") {
-          selectedDropdownOption = 'ایران'; // force Iran for expired users
-        }
+        // if (subscriptionStatus == "expired" ||
+        //     subscriptionStatus == "unknown") {
+        //   selectedDropdownOption = 'ایران'; // force Iran for expired users
+        // }
       });
 
       final links = [...result.takLinks, staticIranConfig];
@@ -1004,7 +1006,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ],
                         ),
                       ),
-                      SizedBox(height: 18),
+                      SizedBox(height: 12),
 
                       // Dropdown
                       Padding(
@@ -1171,21 +1173,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ],
                             ),
-                            SizedBox(height: 18),
+                            SizedBox(height: 12),
                             Center(
                               child: GestureDetector(
                                 onTap: () async {
                                   currentTestingIndex = 0;
-                                  final serverLabel = getServerLabel(
-                                    selectedConfig ?? '',
-                                  );
-                                  final isIranServer = serverLabel.contains(
-                                    "ایران",
-                                  );
+                                  // final serverLabel = getServerLabel(
+                                  //   selectedConfig ?? '',
+                                  // );
+                                  // final isIranServer = serverLabel.contains(
+                                  //   "ایران",
+                                  // );
 
+                                  // if ((subscriptionStatus == 'expired' ||
+                                  //         subscriptionStatus == 'unknown') &&
+                                  //     !isIranServer) {
                                   if ((subscriptionStatus == 'expired' ||
-                                          subscriptionStatus == 'unknown') &&
-                                      !isIranServer) {
+                                      subscriptionStatus == 'unknown')) {
                                     showMyToast(
                                       "لطفاً از دکمه تمدید استفاده کنید",
                                       context,
@@ -1336,7 +1340,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ),
                             ),
-                            SizedBox(height: 18),
+                            SizedBox(height: 12),
 
                             Center(
                               child: SizedBox(
@@ -1441,6 +1445,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ),
                             ),
+                            const SizedBox(height: 12),
+
+                            FutureBuilder<String>(
+                              future: _getAppVersion(),
+                              builder: (context, snapshot) {
+                                final localVersion = snapshot.data ?? '';
+                                return UpdateBanner(
+                                  currentVersion: localVersion,
+                                  latestVersion: account?.latestVersion,
+                                  updateUrl: account?.updateUrl,
+                                );
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -1531,9 +1548,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // Version + Username
                 GestureDetector(
                   onTap: () {
-                    final username = account?.username;
-                    if (username != null) {
-                      Clipboard.setData(ClipboardData(text: username));
+                    final usernametoCopy = account?.username ?? username;
+                    if (usernametoCopy != null) {
+                      Clipboard.setData(ClipboardData(text: usernametoCopy));
                     }
                   },
                   onLongPress: () async {
@@ -1703,10 +1720,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               // Version + Username
                               GestureDetector(
                                 onTap: () {
-                                  final username = account?.username;
-                                  if (username != null) {
+                                  final usernametoCopy =
+                                      account?.username ?? username;
+                                  if (usernametoCopy != null) {
                                     Clipboard.setData(
-                                      ClipboardData(text: username),
+                                      ClipboardData(text: usernametoCopy),
                                     );
                                   }
                                 },

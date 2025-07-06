@@ -13,7 +13,11 @@ class InfoBox extends StatelessWidget {
       height: 150,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: value == '0' ? Colors.red : const Color(0xFF2C2C2C),
+        color: const Color(0xFF2C2C2C),
+
+        // (double.tryParse(value.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0) < 5
+        // ? Colors.red
+        // : const Color(0xFF2C2C2C),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(

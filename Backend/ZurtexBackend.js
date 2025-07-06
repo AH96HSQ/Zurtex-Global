@@ -240,7 +240,9 @@ app.get("/api/renewal", async (req, res) => {
       isPending,
       packages: grouped,
       cardNumber,
-      message, // ✅ sent to frontend
+      message,
+      pricePerDay: 750,
+      pricePerGB: 3500,
     });
   } catch (err) {
     console.error("❌ Error in /api/renewal:", err);
@@ -301,6 +303,10 @@ app.post("/api/subscription", async (req, res) => {
   const { deviceId } = req.body;
   let vpnInfo = null;
   let hasPendingReceipt = false;
+
+  // ✅ Add version and update URL
+  const latestVersion = "1.0.5"; // You can pull this from DB/env later
+  const updateUrl = "https://github.com/HoseinSadeqi96/Zurtex-Releases/releases/download/v1.0.3/ZurtexVPN_v1.0.3.apk"; // Direct APK link or download page
 
   if (!deviceId || deviceId.length !== 95) {
     console.log("Invalid deviceId format or length");
@@ -371,7 +377,6 @@ app.post("/api/subscription", async (req, res) => {
       "zurtexbackend569827.xyz",
     ];
 
-    // 🧮 Calculate remaining bytes if available
     let usage = vpnInfo?.online_info?.usage || 0;
     let total = vpnInfo?.latest_info?.package_size || 0;
     let remainingBytes = total - usage;
@@ -386,7 +391,9 @@ app.post("/api/subscription", async (req, res) => {
       status: ["expired", "active"].includes(status) ? status : "unknown",
       hasPendingReceipt: hasPendingReceipt,
       domains: domainList,
-      remaining_bytes: remainingBytes, // ✅ NEW FIELD
+      remaining_bytes: remainingBytes,
+      latestVersion,      // ✅ NEW
+      updateUrl           // ✅ NEW
     };
 
     console.log("📤 Responding to client with:", responsePayload);
@@ -396,7 +403,6 @@ app.post("/api/subscription", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
-
 
 app.get("/api/status", async (req, res) => {
   console.log("Status Request Received");
@@ -654,7 +660,7 @@ async function findVpnUserByUsername(username) {
 
     return data.result;
   } catch (err) {
-    if (err.name === 'AbortError') {
+    if (err.name === "AbortError") {
       console.error(`⏰ Timeout while fetching user ${username}`);
     } else {
       console.error("❌ Fetch error during /find:", err);
