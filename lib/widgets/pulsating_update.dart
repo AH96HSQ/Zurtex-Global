@@ -59,9 +59,9 @@ class _UpdateBannerState extends State<UpdateBanner>
   Widget build(BuildContext context) {
     final needsUpdate =
         widget.latestVersion != null &&
-        widget.latestVersion != widget.currentVersion &&
-        widget.latestVersion!.isNotEmpty;
-
+        widget.latestVersion!.isNotEmpty &&
+        widget.currentVersion.isNotEmpty &&
+        widget.latestVersion!.compareTo(widget.currentVersion) > 0;
     if (!needsUpdate) return const SizedBox.shrink();
 
     return Center(

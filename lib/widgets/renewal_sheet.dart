@@ -17,15 +17,17 @@ import 'package:zurtex/widgets/package_selector.dart';
 class RenewalSheet extends StatefulWidget {
   final VpnAccount account;
   final Function(VpnAccount) onReceiptSubmitted;
+  final String country; // ✅ add this
 
   const RenewalSheet({
     required this.account,
     required this.onReceiptSubmitted,
+    required this.country, // ✅ add to constructor
     super.key,
   });
 
   @override
-  State<RenewalSheet> createState() => _RenewalSheetState(); // ✅ Add this
+  State<RenewalSheet> createState() => _RenewalSheetState();
 }
 
 class _RenewalSheetState extends State<RenewalSheet> {
@@ -74,8 +76,11 @@ class _RenewalSheetState extends State<RenewalSheet> {
 
   Future<void> fetchRenewalData() async {
     try {
+      debugPrint("🧪 fetchRenewalData() called!");
+
       final prefs = await SharedPreferences.getInstance();
       final lastDomain = prefs.getString('last_working_domain');
+      debugPrint("❌ Last Domanin $lastDomain");
 
       if (lastDomain == null) {
         debugPrint("❌ No last working domain saved");
@@ -94,14 +99,20 @@ class _RenewalSheetState extends State<RenewalSheet> {
           receiveTimeout: const Duration(seconds: 10),
         ),
       );
-
       final res = await dio.get(
         'http://$lastDomain/api/renewal',
-        queryParameters: {'deviceId': deviceId},
+        queryParameters: {
+          'deviceId': deviceId,
+          '_ts': DateTime.now().millisecondsSinceEpoch, // 🔄 force cache bypass
+        },
       );
 
       if (res.statusCode == 200) {
         final data = res.data;
+
+        // 🔍 Debug prints to trace the issue
+        debugPrint("🔍 Server renewal data: $data");
+        debugPrint("📦 isPending from server: ${data['isPending']}");
 
         setState(() {
           renewalData = data;
@@ -146,70 +157,85 @@ class _RenewalSheetState extends State<RenewalSheet> {
     String base64Receipt,
     String lastDomain,
   ) async {
-    final Dio dio = Dio(
-      BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 15),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': '*/*',
-          'User-Agent': 'ZurtexClient/1.0',
-        },
-      ),
-    );
+    final int totalPrice =
+        (selectedDays * serverProvidedDayPrice) +
+        (selectedGB * serverProvidedGbPrice);
 
-    final uri = 'http://$lastDomain/api/receipt';
+    // 🟡 Select proper domain based on country
+    final String domainToUse = widget.country.trim() == 'ایران'
+        ? '45.138.132.39:4000'
+        : "zurtexbackend569827.xyz";
 
-    try {
-      final int totalPrice =
-          (selectedDays * serverProvidedDayPrice) +
-          (selectedGB * serverProvidedGbPrice);
-
-      final response = await dio.post(
-        uri,
-        data: {
-          "deviceId": deviceId,
-          "receiptData": base64Receipt,
-          "gigabyte": selectedGB,
-          "durationInDays": selectedDays,
-          "price": totalPrice,
-        },
+    Future<bool> tryUpload(String domain) async {
+      final Dio dio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 30),
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'User-Agent': 'ZurtexClient/1.0',
+          },
+        ),
       );
 
-      if (response.statusCode == 200) {
-        showMyToast(
-          "رسید با موفقیت ارسال شد",
-          context,
-          backgroundColor: Colors.green,
-        );
+      final uri = 'http://$domain/api/receipt';
+      debugPrint("📡 Uploading receipt to: $uri");
 
-        widget.onReceiptSubmitted(
-          VpnAccount(
-            username: widget.account.username,
-            test: widget.account.test,
-            expiryTime: widget.account.expiryTime,
-            gigBytes: widget.account.gigBytes,
-            status: widget.account.status,
-            takLinks: widget.account.takLinks,
-            hasPendingReceipt: true,
-            messages: widget.account.messages,
-          ),
-        );
+      try {
+        final response = await dio
+            .post(
+              uri,
+              data: {
+                "deviceId": deviceId,
+                "receiptData": base64Receipt,
+                "gigabyte": selectedGB,
+                "durationInDays": selectedDays,
+                "price": totalPrice,
+              },
+              queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+            )
+            .timeout(const Duration(seconds: 30));
 
-        Navigator.of(context).pop();
-      } else {
-        debugPrint("❌ Server responded with: ${response.statusCode}");
-        showMyToast("خطا در ارسال رسید", context, backgroundColor: Colors.red);
+        if (response.statusCode == 200) {
+          debugPrint("✅ Receipt uploaded successfully.");
+          return true;
+        } else {
+          debugPrint("❌ Server responded with: ${response.statusCode}");
+          return false;
+        }
+      } catch (e) {
+        debugPrint("❌ Upload failed: $e");
+        return false;
       }
-    } on DioException catch (e) {
-      debugPrint("❌ Dio error during receipt upload: ${e.message}");
+    }
+
+    // 🔹 Try uploading once
+    bool success = await tryUpload(domainToUse);
+
+    // ✅ Final result
+    if (success) {
       showMyToast(
-        "ارسال رسید با خطا مواجه شد",
+        "رسید با موفقیت ارسال شد",
         context,
-        backgroundColor: Colors.red,
+        backgroundColor: Colors.green,
       );
-    } catch (e) {
-      debugPrint("❌ Unknown error: $e");
+
+      widget.onReceiptSubmitted(
+        VpnAccount(
+          username: widget.account.username,
+          test: widget.account.test,
+          expiryTime: widget.account.expiryTime,
+          gigBytes: widget.account.gigBytes,
+          status: widget.account.status,
+          takLinks: widget.account.takLinks,
+          hasPendingReceipt: true,
+          messages: widget.account.messages,
+        ),
+      );
+
+      Navigator.of(context).pop();
+    } else {
       showMyToast(
         "ارسال رسید با خطا مواجه شد",
         context,
@@ -220,7 +246,7 @@ class _RenewalSheetState extends State<RenewalSheet> {
 
   void fetchDeviceId() async {
     deviceId = await getDeviceId();
-
+    debugPrint(deviceId);
     if (!mounted) return;
     setState(() {}); // optional, if you want to trigger rebuild
 
@@ -410,13 +436,13 @@ class _RenewalSheetState extends State<RenewalSheet> {
               child: Directionality(
                 textDirection: TextDirection.rtl,
                 child: Text(
-                  'در حساب شما $remainingGB گیگابایت و $remainingDays روز مانده\nچقدر به حسابتون اضافه بشه؟',
+                  'تو حسابتون $remainingGB گیگابایت و $remainingDays روز مونده\nچقدر بهش اضافه بشه؟',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white, fontSize: 16),
                 ),
               ),
             ),
-            const SizedBox(height: 15),
+            const SizedBox(height: 30),
             PackageSelector(
               pricePerDay: serverProvidedDayPrice,
               pricePerGB: serverProvidedGbPrice,
@@ -427,7 +453,7 @@ class _RenewalSheetState extends State<RenewalSheet> {
                 });
               },
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 20),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Directionality(

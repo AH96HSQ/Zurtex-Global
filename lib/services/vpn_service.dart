@@ -1,131 +1,106 @@
 import 'dart:async';
-import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
-import 'package:flutter_v2ray/flutter_v2ray.dart';
 import '../models/vpn_account.dart';
+import 'vpn_connection.dart';
 
 class VpnService {
-  static final ValueNotifier<V2RayStatus> v2rayStatus = ValueNotifier(
-    V2RayStatus(),
-  );
-
-  static final FlutterV2ray flutterV2ray = FlutterV2ray(
-    onStatusChanged: (status) {
-      debugPrint('VPN status changed: ${status.state}');
-      v2rayStatus.value = status; // 🔁 update the notifier
-    },
-  );
+  static int totalAttempts = 1;
+  static double step = 360;
 
   static List<String> domainCandidates = [
+    '45.138.132.39:4000',
     'zurtexbackend569827.xyz',
-    'zurtexbackend198267.xyz',
-    'zurtexbackend256934.xyz',
   ];
 
   static const String backupVpnConfig =
       'vless://5c686fdf-7df3-4723-ac75-fa225edd8865@45.136.5.30:700?encryption=none&security=none&type=tcp&headerType=http#Emergency%20Zurtex%20Connection';
 
-  static Future<void> startVpn(String configString) async {
-    final parser = FlutterV2ray.parseFromURL(configString);
-    final permissionGranted = await flutterV2ray.requestPermission();
-
-    if (!permissionGranted) throw Exception('VPN permission not granted');
-
-    await flutterV2ray.startV2Ray(
-      remark: parser.remark,
-      config: parser.getFullConfiguration(),
-      proxyOnly: false,
-    );
-
-    for (int i = 0; i < 40; i++) {
-      final status = v2rayStatus.value;
-      if (status.state == 'CONNECTED') return;
-      await Future.delayed(const Duration(milliseconds: 250));
-    }
-
-    throw Exception('VPN connection timeout');
-  }
-
   static Future<VpnAccount?> getVpnAccount(
     String deviceId,
     ValueNotifier<double> progressNotifier,
   ) async {
-    final int totalAttempts = domainCandidates.length;
-    final double step = 360 / totalAttempts;
+    final prefs = await SharedPreferences.getInstance();
+    final Dio dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 5),
+        receiveTimeout: const Duration(seconds: 5),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+          'Accept': '*/*',
+        },
+      ),
+    );
+
+    totalAttempts = domainCandidates.length * 2;
+    step = 360 / totalAttempts;
     progressNotifier.value = 360;
 
-    final prefs = await SharedPreferences.getInstance();
-    bool shouldRetryWithVpn = false;
+    for (final domain in domainCandidates) {
+      final url = 'http://$domain/api/subscription';
 
-    Future<VpnAccount?> attemptConnection() async {
-      for (final domain in domainCandidates) {
-        final url = Uri.parse('http://$domain/api/subscription');
-        debugPrint('🌐 Trying subscription from: $url');
-
-        try {
-          final response = await http
-              .post(
-                url,
-                headers: {
-                  'Content-Type': 'application/json',
-                  'User-Agent': 'Mozilla/5.0',
-                  'Accept': '*/*',
-                },
-                body: jsonEncode({'deviceId': deviceId}),
-              )
-              .timeout(const Duration(seconds: 5));
-
-          if (response.statusCode == 200) {
-            final data = jsonDecode(response.body);
-            final account = VpnAccount.fromJson(data);
-            await prefs.setString('last_working_domain', domain);
-            debugPrint('✅ Subscription successful from [$domain]');
-            progressNotifier.value = 0;
-            return account;
-          }
-        } catch (e) {
-          debugPrint('❌ Error connecting to [$domain]: $e');
-          shouldRetryWithVpn = true;
-        }
-
-        progressNotifier.value -= step;
-        await Future.delayed(const Duration(seconds: 2));
-      }
-
-      return null;
-    }
-
-    // 🔹 Stage 1: direct
-    final directResult = await attemptConnection();
-    if (directResult != null) return directResult;
-
-    // 🔹 Stage 2: with VPN
-    if (shouldRetryWithVpn) {
+      // 🔹 1. Try direct connection
+      debugPrint('🔍 [Direct] Trying: $url');
       try {
-        debugPrint('🔄 Retrying with VPN...');
-        await startVpn(backupVpnConfig);
+        final response = await dio.post(
+          url,
+          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+          data: {'deviceId': deviceId},
+        );
 
-        final vpnResult = await attemptConnection();
-
-        debugPrint('🛑 Stopping VPN after retry...');
-        await flutterV2ray.stopV2Ray();
-
-        if (vpnResult != null) return vpnResult;
-
-        // 🔹 Stage 3: retry again after VPN disconnected
-        debugPrint('🔁 Final retry after VPN disconnection...');
-        final finalResult = await attemptConnection();
-        return finalResult;
+        if (response.statusCode == 200) {
+          final account = VpnAccount.fromJson(response.data);
+          await prefs.setString('last_working_domain', domain);
+          debugPrint('✅ [Direct] Success from [$domain]');
+          progressNotifier.value = 0;
+          return account;
+        }
       } catch (e) {
-        debugPrint('❌ VPN retry failed: $e');
-        await flutterV2ray.stopV2Ray();
+        debugPrint('❌ [Direct] Failed from [$domain]: $e');
       }
+
+      progressNotifier.value -= step;
+
+      // 🔹 2. Try with VPN
+      try {
+        debugPrint('🔁 Connecting VPN for [$domain]...');
+        await VpnConnection.connect(backupVpnConfig);
+        await Future.delayed(const Duration(seconds: 3));
+
+        debugPrint('🔍 [VPN] Retrying: $url');
+        final vpnResponse = await dio.post(
+          url,
+          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+          data: {'deviceId': deviceId},
+        );
+
+        if (vpnResponse.statusCode == 200) {
+          final account = VpnAccount.fromJson(vpnResponse.data);
+          await prefs.setString('last_working_domain', domain);
+          debugPrint('✅ [VPN] Success from [$domain]');
+          await VpnConnection.disconnect();
+          progressNotifier.value = 0;
+          return account;
+        } else {
+          debugPrint(
+            '❌ [VPN] Failed from [$domain]: ${vpnResponse.statusCode}',
+          );
+        }
+      } catch (e) {
+        debugPrint('❌ [VPN] Exception from [$domain]: $e');
+      } finally {
+        debugPrint('🛑 Disconnecting VPN...');
+        await VpnConnection.disconnect();
+      }
+
+      progressNotifier.value -= step;
+      await Future.delayed(const Duration(seconds: 1));
     }
 
     progressNotifier.value = 0;
-    debugPrint('❌❌ All connection attempts failed.');
+    debugPrint('❌❌ All per-domain connection attempts failed.');
     return null;
   }
 }

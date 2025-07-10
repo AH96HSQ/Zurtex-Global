@@ -6,7 +6,11 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use((req, res, next) => {
+  console.log(`➡️  Incoming: ${req.method} ${req.originalUrl}`);
+  next();
+});
+app.use(express.json({ limit: "10mb" }));
 
 // Connect to MongoDB
 mongoose
@@ -305,8 +309,8 @@ app.post("/api/subscription", async (req, res) => {
   let hasPendingReceipt = false;
 
   // ✅ Add version and update URL
-  const latestVersion = "1.0.5"; // You can pull this from DB/env later
-  const updateUrl = "https://github.com/HoseinSadeqi96/Zurtex-Releases/releases/download/v1.0.3/ZurtexVPN_v1.0.3.apk"; // Direct APK link or download page
+  const latestVersion = "1.1.0"; // You can pull this from DB/env later
+  const updateUrl = "https://github.com/HoseinSadeqi96/Zurtex-Releases"; // Direct APK link or download page
 
   if (!deviceId || deviceId.length !== 95) {
     console.log("Invalid deviceId format or length");
@@ -403,7 +407,6 @@ app.post("/api/subscription", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
-
 app.get("/api/status", async (req, res) => {
   console.log("Status Request Received");
 
@@ -443,7 +446,6 @@ app.get("/api/status", async (req, res) => {
 });
 app.post("/api/receipt", async (req, res) => {
   const { deviceId, receiptData, gigabyte, durationInDays, price } = req.body;
-
   // ✅ Log the incoming request
   console.log("📥 Incoming receipt upload:", {
     deviceId,
@@ -483,7 +485,6 @@ app.post("/api/receipt", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
-
 app.post("/api/message/read", async (req, res) => {
   const { deviceId } = req.body;
 

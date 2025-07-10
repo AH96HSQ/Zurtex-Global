@@ -1,8 +1,11 @@
 // ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
+import 'package:step_progress_indicator/step_progress_indicator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:zurtex/services/vpn_connection.dart';
 import 'package:zurtex/services/vpn_service.dart';
 import 'package:zurtex/utils/toast_utils.dart';
+import 'package:zurtex/widgets/loading.dart';
 import 'package:zurtex/widgets/pulsating_update.dart';
 import '../services/vpn_utils.dart';
 import 'package:flutter_v2ray/flutter_v2ray.dart'; // ✅ ADD THIS
@@ -152,7 +155,7 @@ const Map<String, String> countryLabelToCode = {
   'هند': 'in',
   'ارمنستان': 'am',
   'ایتالیا': "it",
-  // Add more as needed
+  'پرو': 'pe',
 };
 
 String? getCountryCodeFromLink(String link) {
@@ -198,8 +201,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? selectedConfig;
   String? selectedDropdownOption = 'auto'; // user-selected item
   bool isConnected = false;
-  ValueNotifier<V2RayStatus> v2rayStatus = ValueNotifier(V2RayStatus());
-  late final FlutterV2ray flutterV2ray;
+  final currentStatus = VpnConnection.status.value;
   int? selectedServerPing;
   bool isFetchingPing = false;
   VpnAccount? account;
@@ -231,6 +233,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    initializeVpnState();
+    _loadSelectedDropdownOption();
+    // ✅ this is allowed
+
     rawLabel = '🇮🇷 Iran - Zurtex';
     staticIranConfig =
         'vless://cde304d3-37f5-4f3c-aea5-de73a9305078@45.138.132.39:700'
@@ -247,17 +253,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     fToast = FToast();
     fToast.init(context);
     initializeVpnConfigs();
+  }
 
-    // ✅ First, assign it
-    flutterV2ray = FlutterV2ray(
-      onStatusChanged: (status) {
-        v2rayStatus.value = status;
-      },
-    );
-
-    // ✅ Then call initializeV2Ray()
-    flutterV2ray.initializeV2Ray();
-    //startContinuousSelectedPing();
+  Future<void> initializeVpnState() async {
+    await VpnConnection.initialize();
   }
 
   Future<String> _getAppVersion() async {
@@ -272,6 +271,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void showRenewalSheet(
     BuildContext context, {
     required Function(VpnAccount) onReceiptSubmitted,
+    required String country, // ✅ Add this
   }) {
     showModalBottomSheet(
       context: context,
@@ -279,8 +279,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (_) => RenewalSheet(
         onReceiptSubmitted: onReceiptSubmitted,
         account: account!,
+        country: country, // ✅ Pass it to the widget
       ),
     );
+  }
+
+  void _loadSelectedDropdownOption() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedOption = prefs.getString('selectedDropdownOption');
+
+    if (savedOption != null && savedOption.isNotEmpty) {
+      setState(() {
+        selectedDropdownOption = savedOption;
+        selectedConfig = savedOption; // optional: if you want both
+      });
+    }
   }
   // Future<bool> checkInternetThroughProxy() async {
   //   try {
@@ -336,23 +349,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final total = (selectedDropdownOption == "auto")
         ? (vpnConfigs.length - 1) *
               3 // 3 attempts per server
-        : 3; // 3 attempts for single selected server
+        : 3;
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      textDirection: TextDirection.rtl,
-      children: List.generate(total, (index) {
-        final isActive = index >= currentTestingIndex;
-        return Container(
-          width: 6,
-          height: 8,
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: isActive ? const Color(0xFF56A6E7) : Colors.grey.shade800,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        );
-      }),
+    final currentStep = (total - currentTestingIndex).clamp(0, total);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 0.0),
+      child: StepProgressIndicator(
+        totalSteps: total,
+        currentStep: currentStep,
+        size: 31,
+        padding: 2,
+        selectedColor: const Color(0xFF56A6E7),
+        unselectedColor: Colors.grey.shade800,
+        roundedEdges: const Radius.circular(7),
+      ),
     );
   }
 
@@ -364,8 +375,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final dio = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 3),
-        receiveTimeout: const Duration(seconds: 3),
+        connectTimeout: const Duration(seconds: 2),
+        receiveTimeout: const Duration(seconds: 2),
         validateStatus: (_) => true, // Accept all statuses to handle manually
       ),
     );
@@ -442,21 +453,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return false;
       }
       final config = sortedConfigs[i];
-      final parser = FlutterV2ray.parseFromURL(config);
 
-      final hasPermission = await flutterV2ray.requestPermission();
-      if (!hasPermission) return false;
-
-      await flutterV2ray.startV2Ray(
-        remark: parser.remark,
-        config: parser.getFullConfiguration(),
-        proxyOnly: false,
-      );
+      await VpnConnection.connect(config);
 
       await Future.delayed(const Duration(milliseconds: 1000));
 
       while (true) {
-        if (v2rayStatus.value.state == 'CONNECTED') break;
+        if (VpnConnection.status.value.state == 'CONNECTED') break;
         await Future.delayed(const Duration(milliseconds: 500));
       }
 
@@ -472,10 +475,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       // ❌ If connection fails, stop and try next
-      await flutterV2ray.stopV2Ray();
+      await VpnConnection.disconnect();
       await Future.delayed(const Duration(milliseconds: 1000));
       while (true) {
-        if (v2rayStatus.value.state == 'DISCONNECTED') break;
+        if (VpnConnection.status.value.state == 'DISCONNECTED') break;
         await Future.delayed(const Duration(milliseconds: 500));
       }
     }
@@ -567,17 +570,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 shrinkWrap: true,
                 children: [
                   ListTile(
-                    onTap: () {
+                    onTap: () async {
                       setState(() {
                         selectedDropdownOption = 'auto';
                         selectedConfig = null;
                         selectedServerPing = null;
                       });
+                      // Save to SharedPreferences
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setString(
+                        'selectedDropdownOption',
+                        'auto',
+                      ); // or config.id if it's a full object
+
                       toggleDropdown();
                     },
                     title: const Center(
                       child: Text(
-                        'اتصال به بهترین سرور',
+                        'انتخاب خودکار سرور',
                         style: TextStyle(color: Colors.white, fontSize: 18),
                       ),
                     ),
@@ -588,12 +598,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         horizontal: 15,
                       ), // 👈 30 total
                       child: ListTile(
-                        onTap: () {
+                        onTap: () async {
                           setState(() {
                             selectedDropdownOption = config;
                             selectedConfig = config;
                             selectedServerPing = null;
                           });
+                          // Save to SharedPreferences
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setString(
+                            'selectedDropdownOption',
+                            config,
+                          ); // or config.id if it's a full object
+
                           toggleDropdown();
                         },
                         title: Row(
@@ -642,6 +659,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   bool _monitoringConnection = false;
+  int calculatePingStrength(int ping) {
+    debugPrint('$ping');
+    if (ping < 700) return 5; // excellent
+    if (ping < 1400) return 4; // good
+    if (ping < 2100) return 3; // okay
+    if (ping < 2800) return 2; // bad
+    return 1; // terrible
+  }
+
+  Color getPingColor(int ping) {
+    if (ping < 700) return Colors.green;
+    if (ping < 1400) return Colors.lightGreen;
+    if (ping < 2100) return Colors.orange;
+    if (ping < 2800) return Colors.deepOrange;
+    return Colors.red;
+  }
 
   void startConnectionMonitor() {
     if (_monitoringConnection) return;
@@ -666,9 +699,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
 
         // stop monitoring if V2Ray reports disconnected
-        if (v2rayStatus.value.state == 'DISCONNECTED') {
+        if (VpnConnection.status.value.state == 'DISCONNECTED') {
           _monitoringConnection = false;
-          await flutterV2ray.stopV2Ray();
+          await VpnConnection.disconnect();
           setState(() {
             isConnected = false;
             isCheckingConnection = false;
@@ -810,17 +843,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> initializeVpnConfigs() async {
     try {
-      setState(() {
-        loadingMessage = 'بررسی اتصال اینترنت';
-      });
+      // setState(() {
+      //   loadingMessage = 'بررسی اتصال اینترنت';
+      // });
 
-      final pingTime = await checkInternetWithPing();
-      if (pingTime == null) {
-        setState(() {
-          loadingMessage = 'اینترنت متصل نیست';
-        });
-        return;
-      }
+      // final pingTime = await checkInternetWithPing();
+      // if (pingTime == null) {
+      //   setState(() {
+      //     loadingMessage = 'اینترنت متصل نیست';
+      //   });
+      //   return;
+      // }
 
       setState(() {
         loadingMessage = 'ارتباط با سرور';
@@ -889,7 +922,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> resetVpnWithRealConfig(String config, String remark) async {
-    if (v2rayStatus.value.state == 'CONNECTED') {
+    if (VpnConnection.status.value.state == 'CONNECTED') {
       // VPN is already active — just monitor it
       final savedConfig = await getLastWorkingConfig();
       selectedConfig = savedConfig;
@@ -902,21 +935,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     try {
-      await flutterV2ray.startV2Ray(
-        remark: remark,
-        config: config,
+      await VpnConnection.connect(
+        config,
+        proxyOnly: false,
         blockedApps: null,
         bypassSubnets: null,
-        proxyOnly: false,
       );
 
       // ✅ Wait until it's connected
-      while (v2rayStatus.value.state != 'CONNECTED') {
+      while (VpnConnection.status.value.state != 'CONNECTED') {
         await Future.delayed(const Duration(milliseconds: 100));
       }
 
       // ✅ Immediately stop to flush out other VPN apps
-      await flutterV2ray.stopV2Ray();
+      await VpnConnection.disconnect();
       fetchCurrentIpInfo(); // 🧠 Refresh IP info, DNS, etc.
     } catch (e) {
       // Optionally log
@@ -1044,7 +1076,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                             child: Padding(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                    horizontal: 30,
+                                                    horizontal: 15,
                                                   ),
                                               child: isOpen
                                                   ? const Text(
@@ -1087,82 +1119,122 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                       padding:
                                                           const EdgeInsets.symmetric(
                                                             horizontal: 0,
-                                                          ), // 30 padding on both sides
+                                                          ),
                                                       child: Center(
-                                                        child: Text(
-                                                          seemsDisconnected
-                                                              ? 'متصل نیستید'
-                                                              : 'پینگ ${ping ?? 'در حال دریافت'}',
-                                                          style: TextStyle(
-                                                            color:
-                                                                seemsDisconnected
-                                                                ? Colors.red
-                                                                : Colors.green,
-                                                            fontSize: 18,
-                                                          ),
-                                                          textAlign:
-                                                              TextAlign.center,
-                                                          textDirection:
-                                                              TextDirection.rtl,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          maxLines: 2,
-                                                        ),
-                                                      ),
-                                                    )
-                                                  : selectedDropdownOption ==
-                                                        'auto'
-                                                  ? const Text(
-                                                      'اتصال به بهترین سرور',
-                                                      style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 18,
-                                                      ),
-                                                      textDirection:
-                                                          TextDirection.rtl,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                    )
-                                                  : Row(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .spaceBetween,
-                                                      textDirection: TextDirection
-                                                          .ltr, // RTL for proper Persian layout
-                                                      children: [
-                                                        // 🏳️ Flag on far left (in RTL, this appears visually left)
-                                                        buildFlag(
-                                                          getCountryCodeFromLink(
-                                                            selectedConfig ??
-                                                                '',
-                                                          ),
-                                                          link:
-                                                              selectedConfig ??
-                                                              '',
-                                                        ),
-
-                                                        // 📦 Server label on the right
-                                                        Flexible(
-                                                          child: Text(
-                                                            getServerLabel(
-                                                              selectedConfig ??
-                                                                  '',
-                                                            ),
-                                                            style:
-                                                                const TextStyle(
+                                                        child:
+                                                            !seemsDisconnected
+                                                            ? (ping != null
+                                                                  ? StepProgressIndicator(
+                                                                      totalSteps:
+                                                                          5,
+                                                                      currentStep:
+                                                                          calculatePingStrength(
+                                                                            ping!,
+                                                                          ),
+                                                                      size: 31,
+                                                                      padding:
+                                                                          2,
+                                                                      selectedColor:
+                                                                          getPingColor(
+                                                                            ping!,
+                                                                          ),
+                                                                      unselectedColor: Colors
+                                                                          .grey
+                                                                          .shade800,
+                                                                      roundedEdges:
+                                                                          const Radius.circular(
+                                                                            7,
+                                                                          ),
+                                                                    )
+                                                                  : const Text(
+                                                                      'در حال دریافت کیفیت اتصال',
+                                                                      style: TextStyle(
+                                                                        color: Colors
+                                                                            .green,
+                                                                        fontSize:
+                                                                            18,
+                                                                      ),
+                                                                      textDirection:
+                                                                          TextDirection
+                                                                              .rtl,
+                                                                    ))
+                                                            : const Text(
+                                                                'متصل نیستید',
+                                                                style: TextStyle(
                                                                   color: Colors
-                                                                      .white,
+                                                                      .red,
                                                                   fontSize: 18,
                                                                 ),
-                                                            textDirection:
-                                                                TextDirection
-                                                                    .rtl,
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
+                                                                textDirection:
+                                                                    TextDirection
+                                                                        .rtl,
+                                                              ),
+                                                      ),
+                                                    )
+                                                  : Padding(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 30,
                                                           ),
-                                                        ),
-                                                      ],
+                                                      child:
+                                                          selectedDropdownOption ==
+                                                              'auto'
+                                                          ? const Text(
+                                                              'انتخاب خودکار سرور',
+                                                              style: TextStyle(
+                                                                color: Colors
+                                                                    .white,
+                                                                fontSize: 18,
+                                                              ),
+                                                              textDirection:
+                                                                  TextDirection
+                                                                      .rtl,
+                                                              overflow:
+                                                                  TextOverflow
+                                                                      .ellipsis,
+                                                            )
+                                                          : Row(
+                                                              mainAxisAlignment:
+                                                                  MainAxisAlignment
+                                                                      .spaceBetween,
+                                                              textDirection:
+                                                                  TextDirection
+                                                                      .ltr,
+                                                              children: [
+                                                                // 🏳️ Flag
+                                                                buildFlag(
+                                                                  getCountryCodeFromLink(
+                                                                    selectedConfig ??
+                                                                        '',
+                                                                  ),
+                                                                  link:
+                                                                      selectedConfig ??
+                                                                      '',
+                                                                ),
+
+                                                                // 📦 Server Label
+                                                                Flexible(
+                                                                  child: Text(
+                                                                    getServerLabel(
+                                                                      selectedConfig ??
+                                                                          '',
+                                                                    ),
+                                                                    style: const TextStyle(
+                                                                      color: Colors
+                                                                          .white,
+                                                                      fontSize:
+                                                                          18,
+                                                                    ),
+                                                                    textDirection:
+                                                                        TextDirection
+                                                                            .rtl,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
                                                     ),
                                             ),
                                           ),
@@ -1188,10 +1260,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   // if ((subscriptionStatus == 'expired' ||
                                   //         subscriptionStatus == 'unknown') &&
                                   //     !isIranServer) {
-                                  if ((subscriptionStatus == 'expired' ||
-                                      subscriptionStatus == 'unknown')) {
+                                  if (subscriptionStatus == 'unknown') {
                                     showMyToast(
-                                      "لطفاً از دکمه تمدید استفاده کنید",
+                                      "حجم اشتراک شما تمام شده است، لطفاً از دکمه تمدید استفاده کنید",
+                                      context,
+                                      backgroundColor: Colors.red,
+                                    );
+                                    return;
+                                  }
+
+                                  if (subscriptionStatus == 'expired') {
+                                    showMyToast(
+                                      "مدت زمان اشتراک شما به پایان رسیده است، لطفاً از دکمه تمدید استفاده کنید",
                                       context,
                                       backgroundColor: Colors.red,
                                     );
@@ -1219,24 +1299,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     if (selectedDropdownOption == "auto") {
                                       success = await autoConnect();
                                     } else {
-                                      final parser = FlutterV2ray.parseFromURL(
-                                        selectedConfig!,
-                                      );
+                                      try {
+                                        if (cancelRequested) {
+                                          setState(
+                                            () => isCheckingConnection = false,
+                                          );
+                                          return;
+                                        }
 
-                                      final hasPermission = await flutterV2ray
-                                          .requestPermission();
-                                      if (!hasPermission || cancelRequested) {
+                                        await VpnConnection.connect(
+                                          selectedConfig!,
+                                        );
+                                      } catch (e) {
+                                        debugPrint("❌ VPN connect failed: $e");
                                         setState(
                                           () => isCheckingConnection = false,
                                         );
                                         return;
                                       }
-
-                                      await flutterV2ray.startV2Ray(
-                                        remark: parser.remark,
-                                        config: parser.getFullConfiguration(),
-                                        proxyOnly: false,
-                                      );
 
                                       // Wait for connection or cancellation
                                       while (true) {
@@ -1244,13 +1324,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                           debugPrint(
                                             "🛑 Cancelled by user before connect",
                                           );
-                                          await flutterV2ray.stopV2Ray();
+                                          await VpnConnection.disconnect();
                                           setState(
                                             () => isCheckingConnection = false,
                                           );
                                           return;
                                         }
-                                        final status = v2rayStatus.value;
+
+                                        final status =
+                                            VpnConnection.status.value;
                                         if (status.state == 'CONNECTED') break;
                                         await Future.delayed(
                                           const Duration(milliseconds: 100),
@@ -1281,7 +1363,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         );
                                       }
                                     } else {
-                                      await flutterV2ray.stopV2Ray();
+                                      await VpnConnection.disconnect();
                                       setState(() {
                                         isConnected = false;
                                         isCheckingConnection = false;
@@ -1299,7 +1381,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       }
                                     }
                                   } else {
-                                    await flutterV2ray.stopV2Ray();
+                                    await VpnConnection.disconnect();
                                     stopConnectionMonitor();
 
                                     setState(() {
@@ -1366,6 +1448,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         // ✅ User is in Iran — proceed to show renewal sheet
                                         showRenewalSheet(
                                           context,
+                                          country:
+                                              country!, // ✅ Now this exists
                                           onReceiptSubmitted: (updatedAccount) {
                                             setState(() {
                                               account = updatedAccount;
@@ -1429,13 +1513,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                     color: Colors.white,
                                                     size: 30,
                                                   )
-                                                : Text(
-                                                    "آی پی $country",
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 18,
+                                                : Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 0.0,
+                                                        ),
+                                                    child: Row(
+                                                      mainAxisAlignment:
+                                                          MainAxisAlignment
+                                                              .start,
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .center,
+                                                      textDirection: TextDirection
+                                                          .rtl, // force flag on left, text on right
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        buildFlag(
+                                                          countryLabelToCode[country ??
+                                                                  ''] ??
+                                                              'ir',
+                                                          link:
+                                                              selectedDropdownOption ??
+                                                              '',
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 12,
+                                                        ),
+                                                        Flexible(
+                                                          child: Text(
+                                                            country ?? '',
+                                                            style:
+                                                                const TextStyle(
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize: 18,
+                                                                ),
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ),
-                                                    textAlign: TextAlign.center,
                                                   ),
                                           ),
                                         ),
@@ -1588,42 +1709,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     children: [
                       // Centered ZURTEX content
                       Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                              'ZURTEX',
-                              style: TextStyle(
-                                fontFamily: 'Exo2',
-                                fontWeight: FontWeight.w700,
-                                fontSize: 40,
-                                color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 50,
-                              ),
-                              child: Text(
-                                loadingMessage,
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  color: Colors.white,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                            const SizedBox(height: 30),
-                            if (loadingMessage != 'خطا در دریافت اطلاعات' &&
-                                loadingMessage != 'اینترنت متصل نیست')
-                              Center(
-                                child: LoadingAnimationWidget.threeArchedCircle(
-                                  color: Colors.white,
-                                  size: 60,
-                                ),
-                              ),
-                          ],
+                        child: LoadingProgressWidget(
+                          loadingMessage: loadingMessage,
+                          progressNotifier: progressNotifier,
                         ),
                       ),
 
