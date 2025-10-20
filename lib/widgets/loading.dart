@@ -31,7 +31,9 @@ class _LoadingProgressWidgetState extends State<LoadingProgressWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (!showMainUI && widget.loadingMessage != 'اینترنت متصل نیست') {
+    if (!showMainUI &&
+        widget.loadingMessage != 'اینترنت متصل نیست' &&
+        widget.loadingMessage != 'اینترنت شما ملی است') {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -88,7 +90,8 @@ class _LoadingProgressWidgetState extends State<LoadingProgressWidget> {
           ),
         if (widget.loadingMessage != 'خطا در دریافت اطلاعات' &&
             widget.loadingMessage != 'اینترنت متصل نیست' &&
-            widget.loadingMessage != 'بررسی اتصال اینترنت')
+            widget.loadingMessage != 'بررسی اتصال اینترنت' &&
+            widget.loadingMessage != 'اینترنت شما ملی است')
           Center(
             child: ValueListenableBuilder<double>(
               valueListenable: widget.progressNotifier,
@@ -98,7 +101,7 @@ class _LoadingProgressWidgetState extends State<LoadingProgressWidget> {
                   progress: value,
                   maxProgress: 360,
                   startAngle: -27.5,
-                  foregroundColor: const Color(0xFF56A6E7),
+                  foregroundColor: const Color(0xFF9700FF),
                   backgroundColor: const Color(0xffeeeeee),
                   foregroundStrokeWidth: 6,
                   backgroundStrokeWidth: 6,

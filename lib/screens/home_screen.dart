@@ -1,24 +1,23 @@
 // ignore_for_file: use_build_context_synchronously
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:step_progress_indicator/step_progress_indicator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:zurtex/services/vpn_connection.dart';
 import 'package:zurtex/services/vpn_service.dart';
+import 'package:zurtex/services/auth_service.dart';
 import 'package:zurtex/utils/toast_utils.dart';
 import 'package:zurtex/widgets/loading.dart';
 import 'package:zurtex/widgets/pulsating_update.dart';
 import '../services/vpn_utils.dart';
-import 'package:flutter_v2ray/flutter_v2ray.dart'; // ✅ ADD THIS
 import 'dart:async';
 import '../models/vpn_account.dart';
 import '../widgets/top_curve_clipper.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
-import '../widgets/info_box.dart'; // adjust path based on your structure
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'dart:ui';
-import '../widgets/renewal_sheet.dart'; // adjust path if needed
-import 'package:mobile_device_identifier/mobile_device_identifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -34,14 +33,6 @@ Future<String?> getLastWorkingConfig() async {
   return prefs.getString('last_working_config');
 }
 
-Future<String> getDeviceId() async {
-  final deviceId = await MobileDeviceIdentifier().getDeviceId();
-  if (deviceId == null || deviceId.isEmpty) {
-    throw Exception("Failed to get device ID");
-  }
-  return deviceId;
-}
-
 Future<String?> getCachedUsername() async {
   final prefs = await SharedPreferences.getInstance();
   return prefs.getString('lastVpnUsername');
@@ -49,7 +40,7 @@ Future<String?> getCachedUsername() async {
 // Widget getPingStatusDot(int? ping) {
 //   if (ping == null) {
 //     // still fetching
-//     return LoadingAnimationWidget.beat(color: Color(0xFF56A6E7), size: 20);
+//     return LoadingAnimationWidget.beat(color: Color(0xFF9700FF), size: 20);
 //   }
 
 //   if (ping == -1) {
@@ -141,21 +132,22 @@ const Map<String, String> countryCodeToPersian = {
 };
 
 const Map<String, String> countryLabelToCode = {
-  'آلمان': 'de',
-  'انگلستان': 'gb',
-  'فرانسه': 'fr',
-  'فنلاند': 'fi',
-  'امارات': 'ae',
-  'ایران': 'ir',
-  'آمریکا': 'us',
-  'ژاپن': 'jp',
-  'ترکیه': 'tr',
-  'هلند': 'nl',
-  'کانادا': 'ca',
-  'هند': 'in',
-  'ارمنستان': 'am',
-  'ایتالیا': "it",
-  'پرو': 'pe',
+  'Germany': 'de',
+  'UK': 'gb',
+  'France': 'fr',
+  'Finland': 'fi',
+  'UAE': 'ae',
+  'Iran': 'ir',
+  'USA': 'us',
+  'Japan': 'jp',
+  'Turkey': 'tr',
+  'Netherlands': 'nl',
+  'Canada': 'ca',
+  'India': 'in',
+  'Armenia': 'am',
+  'Italy': 'it',
+  'Peru': 'pe',
+  'Singapore': 'sg',
 };
 
 String? getCountryCodeFromLink(String link) {
@@ -196,7 +188,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   List<String> vpnConfigs = [];
   String? selectedConfig;
   String? selectedDropdownOption = 'auto'; // user-selected item
@@ -229,18 +222,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late final String rawLabel;
   late final String staticIranConfig;
   bool cancelRequested = false;
+  bool hasCachedAccount = true;
+  // late AnimationController _arrowPulseController;
+  bool cameFromSaved = false;
+  bool isFetchingVpnConfig = false;
+  int _selectedPageIndex = 0; // Navigation bar state
 
   @override
   void initState() {
     super.initState();
-    initializeVpnState();
+    // _arrowPulseController = AnimationController(
+    //   vsync: this,
+    //   duration: const Duration(milliseconds: 300),
+    //   lowerBound: 1.0,
+    //   upperBound: 1.06,
+    // )..repeat(reverse: true);
+    _initAsyncThings();
     _loadSelectedDropdownOption();
-    // ✅ this is allowed
+    // initializeVpnState();
+    checkCachedAccount();
+    // loadVpnConfigFromCache();
 
     rawLabel = '🇮🇷 Iran - Zurtex';
     staticIranConfig =
-        'vless://cde304d3-37f5-4f3c-aea5-de73a9305078@45.138.132.39:700'
-        '?security=none&type=tcp&headerType=http&path=%2F&host=rubika.ir,skyroom.online'
+        'vless://cde304d3-37f5-4f3c-aea5-de73a9305078@zurtexbackend256934.xyz:8443'
+        '?encryption=none&security=tls&type=ws&host=zurtexbackend256934.xyz&path=%2Fzurtex'
         '#${Uri.encodeComponent(rawLabel)}';
 
     selectedConfig = staticIranConfig; // ✅ initialize here
@@ -255,8 +261,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     initializeVpnConfigs();
   }
 
+  Future<void> _initAsyncThings() async {
+    await initializeVpnState();
+    await resetVpnWithRealConfig(staticIranConfig, 'cached-resume');
+    await loadVpnConfigFromCache(); // or anything else
+    // ✅ Start VPN from saved static config
+  }
+
   Future<void> initializeVpnState() async {
     await VpnConnection.initialize();
+  }
+
+  Future<void> loadVpnConfigFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString('cachedAccount');
+
+    if (json != null) {
+      try {
+        final cached = VpnAccount.fromJson(jsonDecode(json));
+        final configs = [...cached.takLinks, staticIranConfig];
+        final savedOption = prefs.getString('selectedDropdownOption');
+
+        setState(() {
+          cameFromSaved = true;
+          account = cached;
+          vpnConfigs = configs;
+          selectedDropdownOption = savedOption ?? 'auto';
+          selectedConfig = savedOption;
+          subscriptionStatus = cached.status;
+          hasCachedAccount = true;
+        });
+      } catch (e) {
+        debugPrint('⚠️ Failed to resume from cached account: $e');
+      }
+    }
+  }
+
+  void checkCachedAccount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString('cachedAccount');
+    if (json != null) {
+      setState(() {
+        hasCachedAccount = true;
+      });
+    } else {
+      setState(() {
+        hasCachedAccount = false;
+      });
+    }
   }
 
   Future<String> _getAppVersion() async {
@@ -268,20 +320,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  void showRenewalSheet(
-    BuildContext context, {
-    required Function(VpnAccount) onReceiptSubmitted,
-    required String country, // ✅ Add this
-  }) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => RenewalSheet(
-        onReceiptSubmitted: onReceiptSubmitted,
-        account: account!,
-        country: country, // ✅ Pass it to the widget
-      ),
+  Future<void> _finalizeVpnAccount(VpnAccount result) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final filteredTakLinks = result.takLinks.where((config) {
+      final label = getServerLabel(config).trim();
+      return label.isNotEmpty && label != 'Bad Config' && label != '..';
+    }).toList();
+
+    final cleanedResult = VpnAccount(
+      username: result.username,
+      test: result.test,
+      expiryTime: result.expiryTime,
+      gigBytes: result.gigBytes,
+      status: result.status,
+      takLinks: filteredTakLinks,
+      hasPendingReceipt: result.hasPendingReceipt,
+      messages: result.messages,
+      latestVersion: result.latestVersion,
+      updateUrl: result.updateUrl,
+      currentDomain: result.currentDomain,
     );
+
+    await prefs.setString('lastVpnUsername', cleanedResult.username);
+    await prefs.setString('cachedAccount', jsonEncode(cleanedResult.toJson()));
+
+    if (cleanedResult.currentDomain != null) {
+      await prefs.setString('serversentdomain', cleanedResult.currentDomain!);
+    }
+
+    setState(() {
+      account = cleanedResult;
+      subscriptionStatus = cleanedResult.status;
+    });
+
+    final links = [...filteredTakLinks, staticIranConfig];
+
+    final validConfigs = links.where((config) {
+      final label = getServerLabel(config).trim();
+      return label.isNotEmpty && label != 'Bad Config' && label != '..';
+    }).toList();
+
+    final newSelected = validConfigs.contains(selectedConfig)
+        ? selectedConfig
+        : (validConfigs.isNotEmpty ? validConfigs.first : null);
+
+    if (newSelected != null) {
+      await resetVpnWithRealConfig(newSelected, 'reset-step');
+    }
+
+    setState(() {
+      vpnConfigs = validConfigs;
+      selectedConfig = newSelected;
+    });
   }
 
   void _loadSelectedDropdownOption() async {
@@ -360,42 +451,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         currentStep: currentStep,
         size: 31,
         padding: 2,
-        selectedColor: const Color(0xFF56A6E7),
+        selectedColor: const Color(0xFF9700FF),
         unselectedColor: Colors.grey.shade800,
         roundedEdges: const Radius.circular(7),
       ),
     );
   }
 
-  Future<int?> checkInternetWithPing() async {
-    if (!isAppActive) return null;
+  Future<int?> checkInternetWithPing({
+    bool useIranianSite = false,
+    bool pingOnly = false, // ✅ New parameter
+  }) async {
+    if (!isAppActive && isConnected) return null;
 
     const int maxAttempts = 3;
-    const String url = 'https://www.google.com/generate_204';
+
+    final String url = pingOnly
+        ? 'http://clients3.google.com/generate_204' // ✅ Google lightweight ping
+        : useIranianSite
+        ? 'https://rubika.ir'
+        : 'https://api64.ipify.org';
 
     final dio = Dio(
       BaseOptions(
         connectTimeout: const Duration(seconds: 2),
         receiveTimeout: const Duration(seconds: 2),
-        validateStatus: (_) => true, // Accept all statuses to handle manually
+        validateStatus: (_) => true, // Accept all statuses
       ),
     );
 
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-      if (cancelRequested) {
-        return null;
-      }
-      if (!isAppActive) return null;
+      if (cancelRequested) return null;
+      if (!isAppActive && isConnected) return null;
 
       try {
         final stopwatch = Stopwatch()..start();
+        debugPrint('🌐 Trying to connect to $url');
 
         final response = await dio.get(url);
-
         stopwatch.stop();
 
         final isSuccess =
-            response.statusCode == 204 || response.statusCode == 200;
+            response.statusCode == 200 || response.statusCode == 204;
 
         if (isSuccess) {
           return stopwatch.elapsedMilliseconds;
@@ -447,6 +544,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       sortedConfigs.insert(0, savedConfig);
     }
 
+    // 4. Always prioritize هلند server
+    final hollandIndex = sortedConfigs.indexWhere(
+      (c) => getServerLabel(c).contains('هلند'),
+    );
+
+    if (hollandIndex != -1) {
+      final hollandConfig = sortedConfigs.removeAt(hollandIndex);
+      sortedConfigs.insert(0, hollandConfig);
+    }
+
     // 4. Attempt each config in order
     for (int i = 0; i < sortedConfigs.length; i++) {
       if (cancelRequested) {
@@ -466,11 +573,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ping = await checkInternetWithPing();
       if (ping != null) {
         await saveLastWorkingConfig(config); // ✅ Save working config
-        setState(() {
-          selectedConfig = config;
-          isConnected = true;
-        });
-        fetchCurrentIpInfo();
+        // setState(() {
+        //   selectedConfig = config;
+        //   isConnected = true;
+        // });
+        // if (cameFromSaved) {
+        //   // vpnConfigs.clear();
+        //   await initializeVpnConfigs();
+        //   cameFromSaved = false;
+        // }
+        //fetchCurrentIpInfo();
         return true;
       }
 
@@ -486,62 +598,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return false; // ❌ No config worked
   }
 
-  int ipFetchRetryCount = 0;
+  // int ipFetchRetryCount = 0;
 
-  void fetchCurrentIpInfo() async {
-    if (isFetchingIp) return;
+  // void fetchCurrentIpInfo() async {
+  //   if (isFetchingIp) return;
 
-    setState(() {
-      isFetchingIp = true;
-    });
+  //   setState(() {
+  //     isFetchingIp = true;
+  //   });
 
-    final dio = Dio(
-      BaseOptions(
-        connectTimeout: const Duration(seconds: 2),
-        receiveTimeout: const Duration(seconds: 2),
-      ),
-    );
+  //   final dio = Dio(
+  //     BaseOptions(
+  //       connectTimeout: const Duration(seconds: 2),
+  //       receiveTimeout: const Duration(seconds: 2),
+  //     ),
+  //   );
 
-    final url = 'https://ipwho.is/';
-    int attempt = 0;
-    String? resolvedCountry;
+  //   final url = 'https://ipwho.is/';
+  //   int attempt = 0;
+  //   String? resolvedCountry;
 
-    while (true) {
-      try {
-        final response = await dio.get(url);
+  //   while (true) {
+  //     try {
+  //       final response = await dio.get(url);
 
-        if (response.statusCode == 200 && response.data != null) {
-          final data = response.data;
-          final code = isConnected ? data['country'] : data['country_code'];
-          final name = countryCodeToPersian[code] ?? code;
+  //       if (response.statusCode == 200 && response.data != null) {
+  //         final data = response.data;
+  //         final code = isConnected ? data['country'] : data['country_code'];
+  //         final name = countryCodeToPersian[code] ?? code;
 
-          resolvedCountry = name;
-          break;
-        } else {
-          debugPrint("❌ API Error: ${response.statusCode}");
-        }
-      } on DioException catch (e) {
-        debugPrint("❌ Dio error on attempt ${attempt + 1}: ${e.message}");
-      } catch (e) {
-        debugPrint("❌ General error on attempt ${attempt + 1}: $e");
-      }
+  //         resolvedCountry = name == 'پرو' ? 'آمریکا' : name;
+  //         break;
+  //       } else {
+  //         debugPrint("❌ API Error: ${response.statusCode}");
+  //       }
+  //     } on DioException catch (e) {
+  //       debugPrint("❌ Dio error on attempt ${attempt + 1}: ${e.message}");
+  //     } catch (e) {
+  //       debugPrint("❌ General error on attempt ${attempt + 1}: $e");
+  //     }
 
-      attempt++;
+  //     attempt++;
 
-      if (!isConnected && attempt >= 2) {
-        resolvedCountry = "ایران";
-        debugPrint("⚠️ IP fetch failed after 2 attempts. Defaulted to ایران.");
-        break;
-      }
+  //     if (!isConnected && attempt >= 2) {
+  //       resolvedCountry = "ایران";
+  //       debugPrint("⚠️ IP fetch failed after 2 attempts. Defaulted to ایران.");
+  //       break;
+  //     }
 
-      await Future.delayed(const Duration(milliseconds: 1500));
-    }
+  //     await Future.delayed(const Duration(milliseconds: 1500));
+  //   }
 
-    setState(() {
-      country = resolvedCountry;
-      isFetchingIp = false;
-    });
-  }
+  //   setState(() {
+  //     country = resolvedCountry;
+  //     isFetchingIp = false;
+  //   });
+  // }
 
   OverlayEntry _buildDropdownOverlay() {
     final RenderBox renderBox =
@@ -587,7 +699,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     },
                     title: const Center(
                       child: Text(
-                        'انتخاب خودکار سرور',
+                        'Auto Server Selection',
                         style: TextStyle(color: Colors.white, fontSize: 18),
                       ),
                     ),
@@ -682,12 +794,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     () async {
       while (isConnected && _monitoringConnection) {
-        final newPing = await checkInternetWithPing();
+        final newPing = await checkInternetWithPing(pingOnly: true);
         final success = newPing != null;
 
         ping = newPing;
 
-        if (!success && isAppActive) {
+        if (!success && isAppActive && isConnected) {
           failedChecks++;
         } else {
           failedChecks = 0;
@@ -706,7 +818,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             isConnected = false;
             isCheckingConnection = false;
           });
-          fetchCurrentIpInfo();
+          //fetchCurrentIpInfo();
           break;
         }
 
@@ -840,76 +952,91 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   //     // 🔁 Restart immediately — no delay
   //   }
   // }
-
   Future<void> initializeVpnConfigs() async {
-    try {
-      // setState(() {
-      //   loadingMessage = 'بررسی اتصال اینترنت';
-      // });
+    setState(() => isFetchingVpnConfig = true);
 
-      // final pingTime = await checkInternetWithPing();
-      // if (pingTime == null) {
-      //   setState(() {
-      //     loadingMessage = 'اینترنت متصل نیست';
-      //   });
-      //   return;
-      // }
+    try {
+      setState(() {
+        loadingMessage = 'اتصال سریع';
+      });
+
+      VpnAccount? result = await VpnService.getVpnAccount(
+        progressNotifier,
+        () async {},
+        onlyCheckFirstDomain: true,
+      );
+
+      if (result != null) {
+        debugPrint("✅ First domain succeeded — skipping rest of flow");
+        await _finalizeVpnAccount(result);
+        setState(() {
+          cameFromSaved = false; // ✅ mark as fresh fetch
+        });
+        return;
+      }
+
+      setState(() {
+        loadingMessage = 'بررسی اتصال اینترنت';
+      });
+
+      final pingTimeIran = await checkInternetWithPing(useIranianSite: true);
+      if (pingTimeIran == null) {
+        setState(() {
+          loadingMessage = 'اینترنت متصل نیست';
+          isFetchingVpnConfig = false;
+        });
+
+        if (hasCachedAccount) {
+          showMyToast(
+            "اتصال اینترنت برقرار نیست",
+            context,
+            backgroundColor: Colors.red,
+          );
+        }
+        return;
+      }
+
+      final pingTimeInternational = await checkInternetWithPing(
+        useIranianSite: false,
+      );
+      if (pingTimeInternational == null) {
+        setState(() {
+          loadingMessage = 'اینترنت شما ملی است';
+          isFetchingVpnConfig = false;
+        });
+
+        if (hasCachedAccount) {
+          showMyToast("اینترنت ملی است", context, backgroundColor: Colors.red);
+        }
+        return;
+      }
 
       setState(() {
         loadingMessage = 'ارتباط با سرور';
       });
 
-      final deviceId = await getDeviceId();
+      result = await VpnService.getVpnAccount(progressNotifier, () async {});
 
-      final result = await VpnService.getVpnAccount(deviceId, progressNotifier);
       if (result == null) throw Exception('دریافت اطلاعات حساب ناموفق بود');
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('lastVpnUsername', result.username);
+      await _finalizeVpnAccount(result);
       setState(() {
-        account = result;
-        subscriptionStatus = result.status;
-        // if (subscriptionStatus == "expired" ||
-        //     subscriptionStatus == "unknown") {
-        //   selectedDropdownOption = 'ایران'; // force Iran for expired users
-        // }
-      });
-
-      final links = [...result.takLinks, staticIranConfig];
-
-      final validConfigs = links.where((config) {
-        final label = getServerLabel(config).trim();
-        return label.isNotEmpty && label != 'Bad Config' && label != '..';
-      }).toList();
-
-      final newSelected = validConfigs.contains(selectedConfig)
-          ? selectedConfig
-          : (validConfigs.isNotEmpty ? validConfigs.first : null);
-
-      if (newSelected != null) {
-        final parser = FlutterV2ray.parseFromURL(newSelected);
-        await resetVpnWithRealConfig(
-          parser.getFullConfiguration(),
-          'reset-step',
-        );
-      }
-
-      setState(() {
-        vpnConfigs = validConfigs;
-        selectedConfig = newSelected;
+        cameFromSaved = false; // ✅ mark as fresh fetch
       });
     } catch (e) {
       debugPrint("❌ Subscription fetch failed: $e");
-      setState(() {
-        loadingMessage = 'خطا در دریافت اطلاعات';
-      });
+
+      if (hasCachedAccount) {
+        showMyToast(
+          "خطا در دریافت اطلاعات",
+          context,
+          backgroundColor: Colors.red,
+        );
+      }
+    } finally {
+      setState(() => isFetchingVpnConfig = false);
     }
   }
-
-  // String formatPing(int ping) {
-  //   final str = ping.toString();
-  //   return str.padLeft(4, '0');
-  // }
 
   String convertToPersianNumber(String input) {
     const english = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -922,7 +1049,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> resetVpnWithRealConfig(String config, String remark) async {
+    debugPrint("Inside -----");
+    await Future.delayed(const Duration(milliseconds: 1000));
     if (VpnConnection.status.value.state == 'CONNECTED') {
+      debugPrint("Connected -----");
+
       // VPN is already active — just monitor it
       final savedConfig = await getLastWorkingConfig();
       selectedConfig = savedConfig;
@@ -930,324 +1061,360 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         isConnected = true;
       });
       startConnectionMonitor();
-      fetchCurrentIpInfo(); // ✅ Begin monitoring
+      //fetchCurrentIpInfo(); // ✅ Begin monitoring
       return;
     }
+    debugPrint("Not Connected -----");
 
-    try {
-      await VpnConnection.connect(
-        config,
-        proxyOnly: false,
-        blockedApps: null,
-        bypassSubnets: null,
-      );
+    // try {
+    //   await VpnConnection.connect(
+    //     config,
+    //     proxyOnly: false,
+    //     blockedApps: null,
+    //     bypassSubnets: null,
+    //   );
+    //   debugPrint("Connecting -----");
 
-      // ✅ Wait until it's connected
-      while (VpnConnection.status.value.state != 'CONNECTED') {
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
+    //   // ✅ Wait until it's connected
+    //   while (VpnConnection.status.value.state != 'CONNECTED') {
+    //     await Future.delayed(const Duration(milliseconds: 100));
+    //   }
+    //   debugPrint("Successful -----");
 
-      // ✅ Immediately stop to flush out other VPN apps
-      await VpnConnection.disconnect();
-      fetchCurrentIpInfo(); // 🧠 Refresh IP info, DNS, etc.
-    } catch (e) {
-      // Optionally log
-    }
+    //   // ✅ Immediately stop to flush out other VPN apps
+    //   await VpnConnection.disconnect();
+    //   debugPrint("Disconnecting Successful -----");
+
+    //   //fetchCurrentIpInfo(); // 🧠 Refresh IP info, DNS, etc.
+    // } catch (e) {
+    //   // Optionally log
+    // }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque, // Ensure taps outside are caught
-            onTap: () {
-              if (dropdownOpenNotifier.value) {
-                _dropdownOverlay?.remove();
-                dropdownOpenNotifier.value = false;
-              }
-            },
-            child: SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: MediaQuery.of(context).size.height,
+      body: _selectedPageIndex == 0 ? _buildConnectPage() : _buildAccountPage(),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: isConnected
+              ? Colors.green
+              : subscriptionStatus == 'expired' ||
+                    subscriptionStatus == 'unknown'
+              ? Colors.red
+              : const Color(0xFF9700FF),
+        ),
+        child: SafeArea(
+          child: SizedBox(
+            height: 60,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                // Connect button
+                IconButton(
+                  icon: Icon(Icons.vpn_key, color: Colors.white, size: 28),
+                  onPressed: () {
+                    setState(() {
+                      _selectedPageIndex = 0;
+                    });
+                  },
                 ),
-                child: IntrinsicHeight(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Stack(
-                        children: [
-                          // background curved header
-                          ClipPath(
-                            clipper: TopCurveClipper(),
-                            child: Container(
-                              height: 155,
-                              color: isConnected
-                                  ? Colors.green
-                                  : subscriptionStatus == 'expired' ||
-                                        subscriptionStatus == 'unknown'
-                                  ? Colors.red
-                                  : const Color(
-                                      0xFF56A6E7,
-                                    ), // blue when not connected and not expired
-                            ),
-                          ),
+                // Account button
+                IconButton(
+                  icon: Icon(
+                    Icons.account_circle,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _selectedPageIndex = 1;
+                    });
+                  },
+                ),
+                // Refresh button
+                IconButton(
+                  icon: isFetchingVpnConfig
+                      ? LoadingAnimationWidget.threeArchedCircle(
+                          color: Colors.white,
+                          size: 28,
+                        )
+                      : Icon(Icons.cloud_done, color: Colors.white, size: 28),
+                  onPressed: isFetchingVpnConfig
+                      ? null
+                      : () async {
+                          await initializeVpnConfigs();
+                        },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-                          // content above the curve
-                          Column(
-                            children: [
-                              const SizedBox(height: 35),
-                              Center(
-                                child: const Text(
-                                  'ZURTEX',
-                                  style: TextStyle(
-                                    fontFamily: 'Exo2',
-                                    fontWeight:
-                                        FontWeight.w700, // or w600 or normal
-                                    fontSize: 40,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ), // spacing from top
-                              // other body content goes here...
-                            ],
+  Widget _buildConnectPage() {
+    return Stack(
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque, // Ensure taps outside are caught
+          onTap: () {
+            if (dropdownOpenNotifier.value) {
+              _dropdownOverlay?.remove();
+              dropdownOpenNotifier.value = false;
+            }
+          },
+          child: SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: MediaQuery.of(context).size.height,
+              ),
+              child: IntrinsicHeight(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Stack(
+                      children: [
+                        // background curved header
+                        ClipPath(
+                          clipper: TopCurveClipper(),
+                          child: Container(
+                            height: 195,
+                            color: isConnected
+                                ? Colors.green
+                                : subscriptionStatus == 'expired' ||
+                                      subscriptionStatus == 'unknown'
+                                ? Colors.red
+                                : const Color(
+                                    0xFF9700FF,
+                                  ), // blue when not connected and not expired
                           ),
-                        ],
-                      ),
-                      SizedBox(
-                        height: MediaQuery.of(context).size.height * 0.04,
-                      ), // 5% of screen height
+                        ),
 
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        // content above the curve
+                        Column(
                           children: [
-                            InfoBox(
-                              title: 'روز باقی‌مانده',
-                              value: account?.remainingDays.toString() ?? '---',
+                            const SizedBox(height: 35),
+                            Center(
+                              child: const Text(
+                                'ZURTEX',
+                                style: TextStyle(
+                                  fontFamily: 'Exo2',
+                                  fontWeight:
+                                      FontWeight.w700, // or w600 or normal
+                                  fontSize: 40,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
-                            InfoBox(
-                              title: 'حجم باقی‌مانده',
-                              value:
-                                  '${account?.remainingGB.toStringAsFixed(1) ?? '--'} GB',
-                            ),
+                            // spacing from top
+                            const Text(
+                              'Global',
+                              style: TextStyle(
+                                fontWeight:
+                                    FontWeight.w500, // or w600 or normal
+                                fontSize: 20,
+                                color: Colors.white,
+                              ),
+                            ), // spacing from top
+                            // other body content goes here...
                           ],
                         ),
-                      ),
-                      SizedBox(height: 12),
-
-                      // Dropdown
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                // 🔽 Dropdown
-                                CompositedTransformTarget(
-                                  link: _layerLink,
-                                  child: GestureDetector(
-                                    key: _dropdownKey,
-                                    onTap: () {
-                                      if (isConnected || isCheckingConnection) {
-                                        return; // 🔒 don't open dropdown if connected
-                                      }
-                                      toggleDropdown(); // 🔓 open if not connected
-                                    },
-                                    child: ValueListenableBuilder<bool>(
-                                      valueListenable: dropdownOpenNotifier,
-                                      builder: (context, isOpen, _) {
-                                        return Container(
-                                          width: 310,
-                                          height: 65,
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF303030),
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
+                      ],
+                    ),
+                    // Center the content vertically with adjustment for navbar
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment(0, -0.5), // Shifted up from center
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Server Dropdown
+                              CompositedTransformTarget(
+                                link: _layerLink,
+                                child: GestureDetector(
+                                  key: _dropdownKey,
+                                  onTap: () {
+                                    if (isConnected || isCheckingConnection) {
+                                      return; // 🔒 don't open dropdown if connected
+                                    }
+                                    toggleDropdown(); // 🔓 open if not connected
+                                  },
+                                  child: ValueListenableBuilder<bool>(
+                                    valueListenable: dropdownOpenNotifier,
+                                    builder: (context, isOpen, _) {
+                                      return Container(
+                                        width: 310,
+                                        height: 65,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF303030),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
                                           ),
-                                          child: Center(
-                                            child: Padding(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 15,
-                                                  ),
-                                              child: isOpen
-                                                  ? const Text(
-                                                      'سروری را برای اتصال انتخاب کنید',
-                                                      style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 18,
-                                                      ),
-                                                      textDirection:
-                                                          TextDirection.rtl,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                    )
-                                                  : isCheckingConnection
-                                                  ? cancelRequested
+                                        ),
+                                        child: Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 15,
+                                            ),
+                                            child: isOpen
+                                                ? const Text(
+                                                    'Select a server to connect',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 18,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  )
+                                                : isCheckingConnection
+                                                ? cancelRequested
+                                                      ? const Text(
+                                                          'Canceling connection',
+                                                          style: TextStyle(
+                                                            color: Colors.white,
+                                                            fontSize: 18,
+                                                          ),
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        )
+                                                      : Row(
+                                                          children: [
+                                                            Expanded(
+                                                              child:
+                                                                  buildServerProgressBar(), // ✅ your widget
+                                                            ),
+                                                          ],
+                                                        )
+                                                : isConnected
+                                                ? Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 0,
+                                                        ),
+                                                    child: Center(
+                                                      child: !seemsDisconnected
+                                                          ? (ping != null
+                                                                ? StepProgressIndicator(
+                                                                    totalSteps:
+                                                                        5,
+                                                                    currentStep:
+                                                                        calculatePingStrength(
+                                                                          ping!,
+                                                                        ),
+                                                                    size: 31,
+                                                                    padding: 2,
+                                                                    selectedColor:
+                                                                        getPingColor(
+                                                                          ping!,
+                                                                        ),
+                                                                    unselectedColor:
+                                                                        Colors
+                                                                            .grey
+                                                                            .shade800,
+                                                                    roundedEdges:
+                                                                        const Radius.circular(
+                                                                          7,
+                                                                        ),
+                                                                  )
+                                                                : const Text(
+                                                                    'Checking connection quality',
+                                                                    style: TextStyle(
+                                                                      color: Colors
+                                                                          .green,
+                                                                      fontSize:
+                                                                          18,
+                                                                    ),
+                                                                  ))
+                                                          : const Text(
+                                                              'Not connected',
+                                                              style: TextStyle(
+                                                                color:
+                                                                    Colors.red,
+                                                                fontSize: 18,
+                                                              ),
+                                                            ),
+                                                    ),
+                                                  )
+                                                : Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 30,
+                                                        ),
+                                                    child:
+                                                        selectedDropdownOption ==
+                                                            'auto'
                                                         ? const Text(
-                                                            'در حال لغو اتصال',
+                                                            'Auto Server Selection',
                                                             style: TextStyle(
                                                               color:
                                                                   Colors.white,
                                                               fontSize: 18,
                                                             ),
-                                                            textDirection:
-                                                                TextDirection
-                                                                    .rtl,
                                                             overflow:
                                                                 TextOverflow
                                                                     .ellipsis,
                                                           )
                                                         : Row(
+                                                            mainAxisAlignment:
+                                                                MainAxisAlignment
+                                                                    .spaceBetween,
+                                                            textDirection:
+                                                                TextDirection
+                                                                    .ltr,
                                                             children: [
-                                                              Expanded(
-                                                                child:
-                                                                    buildServerProgressBar(), // ✅ your widget
-                                                              ),
-                                                            ],
-                                                          )
-                                                  : isConnected
-                                                  ? Padding(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 0,
-                                                          ),
-                                                      child: Center(
-                                                        child:
-                                                            !seemsDisconnected
-                                                            ? (ping != null
-                                                                  ? StepProgressIndicator(
-                                                                      totalSteps:
-                                                                          5,
-                                                                      currentStep:
-                                                                          calculatePingStrength(
-                                                                            ping!,
-                                                                          ),
-                                                                      size: 31,
-                                                                      padding:
-                                                                          2,
-                                                                      selectedColor:
-                                                                          getPingColor(
-                                                                            ping!,
-                                                                          ),
-                                                                      unselectedColor: Colors
-                                                                          .grey
-                                                                          .shade800,
-                                                                      roundedEdges:
-                                                                          const Radius.circular(
-                                                                            7,
-                                                                          ),
-                                                                    )
-                                                                  : const Text(
-                                                                      'در حال دریافت کیفیت اتصال',
-                                                                      style: TextStyle(
-                                                                        color: Colors
-                                                                            .green,
-                                                                        fontSize:
-                                                                            18,
-                                                                      ),
-                                                                      textDirection:
-                                                                          TextDirection
-                                                                              .rtl,
-                                                                    ))
-                                                            : const Text(
-                                                                'متصل نیستید',
-                                                                style: TextStyle(
-                                                                  color: Colors
-                                                                      .red,
-                                                                  fontSize: 18,
+                                                              // 🏳️ Flag
+                                                              buildFlag(
+                                                                getCountryCodeFromLink(
+                                                                  selectedConfig ??
+                                                                      '',
                                                                 ),
-                                                                textDirection:
-                                                                    TextDirection
-                                                                        .rtl,
+                                                                link:
+                                                                    selectedConfig ??
+                                                                    '',
                                                               ),
-                                                      ),
-                                                    )
-                                                  : Padding(
-                                                      padding:
-                                                          const EdgeInsets.symmetric(
-                                                            horizontal: 30,
-                                                          ),
-                                                      child:
-                                                          selectedDropdownOption ==
-                                                              'auto'
-                                                          ? const Text(
-                                                              'انتخاب خودکار سرور',
-                                                              style: TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 18,
-                                                              ),
-                                                              textDirection:
-                                                                  TextDirection
-                                                                      .rtl,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                            )
-                                                          : Row(
-                                                              mainAxisAlignment:
-                                                                  MainAxisAlignment
-                                                                      .spaceBetween,
-                                                              textDirection:
-                                                                  TextDirection
-                                                                      .ltr,
-                                                              children: [
-                                                                // 🏳️ Flag
-                                                                buildFlag(
-                                                                  getCountryCodeFromLink(
+
+                                                              // 📦 Server Label
+                                                              Flexible(
+                                                                child: Text(
+                                                                  getServerLabel(
                                                                     selectedConfig ??
                                                                         '',
                                                                   ),
-                                                                  link:
-                                                                      selectedConfig ??
-                                                                      '',
-                                                                ),
-
-                                                                // 📦 Server Label
-                                                                Flexible(
-                                                                  child: Text(
-                                                                    getServerLabel(
-                                                                      selectedConfig ??
-                                                                          '',
-                                                                    ),
-                                                                    style: const TextStyle(
-                                                                      color: Colors
-                                                                          .white,
-                                                                      fontSize:
-                                                                          18,
-                                                                    ),
-                                                                    textDirection:
-                                                                        TextDirection
-                                                                            .rtl,
-                                                                    overflow:
-                                                                        TextOverflow
-                                                                            .ellipsis,
+                                                                  style: const TextStyle(
+                                                                    color: Colors
+                                                                        .white,
+                                                                    fontSize:
+                                                                        18,
                                                                   ),
+                                                                  textDirection:
+                                                                      TextDirection
+                                                                          .rtl,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
                                                                 ),
-                                                              ],
-                                                            ),
-                                                    ),
-                                            ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                  ),
                                           ),
-                                        );
-                                      },
-                                    ),
+                                        ),
+                                      );
+                                    },
                                   ),
                                 ),
-                              ],
-                            ),
-                            SizedBox(height: 12),
-                            Center(
-                              child: GestureDetector(
+                              ),
+
+                              const SizedBox(height: 24),
+
+                              // Connect/Disconnect Button (Large Square)
+                              GestureDetector(
                                 onTap: () async {
                                   currentTestingIndex = 0;
                                   // final serverLabel = getServerLabel(
@@ -1262,7 +1429,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   //     !isIranServer) {
                                   if (subscriptionStatus == 'unknown') {
                                     showMyToast(
-                                      "حجم اشتراک شما تمام شده است، لطفاً از دکمه تمدید استفاده کنید",
+                                      "Your subscription data has run out",
                                       context,
                                       backgroundColor: Colors.red,
                                     );
@@ -1271,7 +1438,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                                   if (subscriptionStatus == 'expired') {
                                     showMyToast(
-                                      "مدت زمان اشتراک شما به پایان رسیده است، لطفاً از دکمه تمدید استفاده کنید",
+                                      "Your subscription time has expired",
                                       context,
                                       backgroundColor: Colors.red,
                                     );
@@ -1286,7 +1453,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     debugPrint('🛑 Cancel requested');
                                     return;
                                   }
-
+                                  if (vpnConfigs.isEmpty) {
+                                    return;
+                                  }
                                   if (!isConnected) {
                                     setState(() {
                                       isCheckingConnection = true;
@@ -1333,7 +1502,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                                         final status =
                                             VpnConnection.status.value;
-                                        if (status.state == 'CONNECTED') break;
+                                        if (status.state == 'CONNECTED') {
+                                          break;
+                                        }
                                         await Future.delayed(
                                           const Duration(milliseconds: 100),
                                         );
@@ -1350,9 +1521,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         isConnected = true;
                                         isCheckingConnection = false;
                                       });
-
                                       startConnectionMonitor();
-                                      fetchCurrentIpInfo();
+                                      if (cameFromSaved) {
+                                        // vpnConfigs.clear();
+                                        await initializeVpnConfigs();
+                                        cameFromSaved = false;
+                                      }
+                                      //fetchCurrentIpInfo();
 
                                       if (selectedConfig != null) {
                                         final prefs =
@@ -1368,13 +1543,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         isConnected = false;
                                         isCheckingConnection = false;
                                       });
-                                      fetchCurrentIpInfo();
+                                      //fetchCurrentIpInfo();
 
                                       if (!cancelRequested) {
                                         showMyToast(
                                           selectedDropdownOption == "auto"
-                                              ? "هیچ سروری متصل نشد. لطفا سرور ها را بازرسانی کرده یا با پشتیبانی تماس بگیرید."
-                                              : "اتصال برقرار نشد. لطفا سرور دیگری انتخاب کنید.",
+                                              ? "No server connected. Please refresh servers or contact support."
+                                              : "Connection failed. Please select another server.",
                                           currentContext,
                                           backgroundColor: Colors.red,
                                         );
@@ -1387,12 +1562,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     setState(() {
                                       isConnected = false;
                                     });
-                                    fetchCurrentIpInfo();
+                                    //fetchCurrentIpInfo();
                                   }
                                 },
                                 child: Container(
                                   width: 310,
-                                  height: 65,
+                                  height: 310,
                                   decoration: BoxDecoration(
                                     color: isConnected
                                         ? Colors.green
@@ -1400,456 +1575,351 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               subscriptionStatus == 'unknown'
                                         ? Colors.red
                                         : const Color(
-                                            0xFF56A6E7,
+                                            0xFF9700FF,
                                           ), // blue when not connected and not expired
 
-                                    borderRadius: BorderRadius.circular(12),
+                                    borderRadius: BorderRadius.circular(24),
                                   ),
                                   child: Center(
-                                    child: isCheckingConnection
+                                    child:
+                                        isCheckingConnection ||
+                                            vpnConfigs.isEmpty
                                         ? LoadingAnimationWidget.threeArchedCircle(
                                             color: Colors.white,
-                                            size: 30,
+                                            size: 50,
                                           )
                                         : Text(
-                                            isConnected ? 'قطع اتصال' : 'اتصال',
+                                            isConnected
+                                                ? 'Disconnect'
+                                                : 'Connect',
                                             style: const TextStyle(
                                               color: Colors.white,
-                                              fontSize: 18,
+                                              fontSize: 28,
+                                              fontWeight: FontWeight.bold,
                                             ),
                                           ),
                                   ),
                                 ),
                               ),
-                            ),
-                            SizedBox(height: 12),
 
-                            Center(
-                              child: SizedBox(
-                                width: double
-                                    .infinity, // 💡 Force full screen width
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment
-                                      .center, // ✅ center the children inside
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () {
-                                        // if (country != 'ایران' ||
-                                        //     isFetchingIp ||
-                                        //     isCheckingConnection) {
-                                        //   showMyToast(
-                                        //     "برای تمدید اشتراک، لطفاً آی‌پی خود را به ایران تغییر دهید. در صورت نیاز، سرور ایران را فعال کنید.",
-                                        //     context,
-                                        //     backgroundColor: Colors.red,
-                                        //   );
-                                        //   return;
-                                        // }
+                              const SizedBox(height: 24),
 
-                                        // ✅ User is in Iran — proceed to show renewal sheet
-                                        showRenewalSheet(
-                                          context,
-                                          country:
-                                              country!, // ✅ Now this exists
-                                          onReceiptSubmitted: (updatedAccount) {
-                                            setState(() {
-                                              account = updatedAccount;
-                                            });
-                                          },
-                                        );
-                                      },
-
-                                      child: Container(
-                                        width: 150,
-                                        height: 65,
-                                        decoration: BoxDecoration(
-                                          color: isConnected
-                                              ? Colors.green
-                                              : subscriptionStatus ==
-                                                        'expired' ||
-                                                    subscriptionStatus ==
-                                                        'unknown'
-                                              ? Colors.red
-                                              : const Color(
-                                                  0xFF56A6E7,
-                                                ), // blue when not connected and not expired
-
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                        ),
-                                        child: const Center(
-                                          child: Text(
-                                            "تمدید",
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 18,
-                                            ),
-                                            textDirection: TextDirection.rtl,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-
-                                    GestureDetector(
-                                      onTap: () {
-                                        if (!isFetchingIp) {
-                                          fetchCurrentIpInfo(); // ✅ Refresh IP
-                                        }
-                                      },
-                                      child: Center(
-                                        child: Container(
-                                          width: 150,
-                                          height: 65,
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF303030),
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                          child: Center(
-                                            child: isFetchingIp
-                                                ? LoadingAnimationWidget.threeArchedCircle(
-                                                    color: Colors.white,
-                                                    size: 30,
-                                                  )
-                                                : Padding(
-                                                    padding:
-                                                        const EdgeInsets.symmetric(
-                                                          horizontal: 0.0,
-                                                        ),
-                                                    child: Row(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .start,
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .center,
-                                                      textDirection: TextDirection
-                                                          .rtl, // force flag on left, text on right
-                                                      mainAxisSize:
-                                                          MainAxisSize.min,
-                                                      children: [
-                                                        buildFlag(
-                                                          countryLabelToCode[country ??
-                                                                  ''] ??
-                                                              'ir',
-                                                          link:
-                                                              selectedDropdownOption ??
-                                                              '',
-                                                        ),
-                                                        const SizedBox(
-                                                          width: 12,
-                                                        ),
-                                                        Flexible(
-                                                          child: Text(
-                                                            country ?? '',
-                                                            style:
-                                                                const TextStyle(
-                                                                  color: Colors
-                                                                      .white,
-                                                                  fontSize: 18,
-                                                                ),
-                                                            overflow:
-                                                                TextOverflow
-                                                                    .ellipsis,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-
-                            FutureBuilder<String>(
-                              future: _getAppVersion(),
-                              builder: (context, snapshot) {
-                                final localVersion = snapshot.data ?? '';
-                                return UpdateBanner(
-                                  currentVersion: localVersion,
-                                  latestVersion: account?.latestVersion,
-                                  updateUrl: account?.updateUrl,
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 20,
-            left: 0,
-            right: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Text Buttons Row
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 50),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      GestureDetector(
-                        onTap: () {
-                          launchUrl(Uri.parse('https://t.me/Zurtexapp'));
-                        },
-                        child: const Text(
-                          'پشتیبانی',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                            decoration: TextDecoration.underline,
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () async {
-                          vpnConfigs.clear();
-                          await initializeVpnConfigs();
-                        },
-                        child: const Text(
-                          'دریافت سرورها',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                            decoration: TextDecoration.underline,
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          launchUrl(Uri.parse('https://t.me/ZurtexV2rayApp'));
-                        },
-                        child: const Text(
-                          'کانال تلگرام',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                            decoration: TextDecoration.underline,
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          launchUrl(
-                            Uri.parse('https://zurtex.net'),
-                          ); // 🔁 Replace with actual GitHub URL
-                        },
-                        child: const Text(
-                          'آپدیت',
-                          style: TextStyle(
-                            color: Colors.grey,
-                            fontSize: 13,
-                            decoration: TextDecoration.underline,
-                          ),
-                          textDirection: TextDirection.rtl,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 15),
-
-                // Version + Username
-                GestureDetector(
-                  onTap: () {
-                    final usernametoCopy = account?.username ?? username;
-                    if (usernametoCopy != null) {
-                      Clipboard.setData(ClipboardData(text: usernametoCopy));
-                    }
-                  },
-                  onLongPress: () async {
-                    final deviceId = await getDeviceId();
-                    Clipboard.setData(ClipboardData(text: deviceId));
-                  },
-                  child: FutureBuilder<String>(
-                    future: _getAppVersion(),
-                    builder: (context, snapshot) {
-                      final version = snapshot.data ?? '';
-                      final user = account?.username ?? username ?? '---';
-                      return Text(
-                        'V$version  $user',
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 12,
-                          decoration: TextDecoration.underline,
-                        ),
-                        textDirection: TextDirection.rtl,
-                        textAlign: TextAlign.center,
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (vpnConfigs.isEmpty)
-            Positioned.fill(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 30.0, sigmaY: 30.0),
-                child: Container(
-                  color: const Color(0xFF303030).withAlpha(50),
-                  child: Stack(
-                    children: [
-                      // Centered ZURTEX content
-                      Center(
-                        child: LoadingProgressWidget(
-                          loadingMessage: loadingMessage,
-                          progressNotifier: progressNotifier,
-                        ),
-                      ),
-
-                      // Bottom actions
-                      if (loadingMessage == 'خطا در دریافت اطلاعات' ||
-                          loadingMessage == 'اینترنت متصل نیست')
-                        Positioned(
-                          bottom: 20,
-                          left: 0,
-                          right: 0,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // Text Buttons Row
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 40,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () {
-                                        launchUrl(
-                                          Uri.parse('https://t.me/Zurtexapp'),
-                                        );
-                                      },
-                                      child: const Text(
-                                        'پشتیبانی',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 13,
-                                          decoration: TextDecoration.underline,
-                                        ),
-                                        textDirection: TextDirection.rtl,
-                                      ),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () async {
-                                        vpnConfigs.clear();
-                                        await initializeVpnConfigs();
-                                      },
-                                      child: const Text(
-                                        'تلاش مجدد',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 13,
-                                          decoration: TextDecoration.underline,
-                                        ),
-                                        textDirection: TextDirection.rtl,
-                                      ),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
-                                        launchUrl(
-                                          Uri.parse(
-                                            'https://t.me/ZurtexV2rayApp',
-                                          ),
-                                        );
-                                      },
-                                      child: const Text(
-                                        'کانال تلگرام',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 13,
-                                          decoration: TextDecoration.underline,
-                                        ),
-                                        textDirection: TextDirection.rtl,
-                                      ),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () {
-                                        launchUrl(
-                                          Uri.parse('https://zurtex.net'),
-                                        ); // 🔁 Replace with actual GitHub URL
-                                      },
-                                      child: const Text(
-                                        'آپدیت',
-                                        style: TextStyle(
-                                          color: Colors.grey,
-                                          fontSize: 13,
-                                          decoration: TextDecoration.underline,
-                                        ),
-                                        textDirection: TextDirection.rtl,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              const SizedBox(height: 15),
-
-                              // Version + Username
-                              GestureDetector(
-                                onTap: () {
-                                  final usernametoCopy =
-                                      account?.username ?? username;
-                                  if (usernametoCopy != null) {
-                                    Clipboard.setData(
-                                      ClipboardData(text: usernametoCopy),
-                                    );
-                                  }
-                                },
-                                onLongPress: () async {
-                                  final deviceId = await getDeviceId();
-                                  Clipboard.setData(
-                                    ClipboardData(text: deviceId),
+                              // Update Banner
+                              FutureBuilder<String>(
+                                future: _getAppVersion(),
+                                builder: (context, snapshot) {
+                                  final localVersion = snapshot.data ?? '';
+                                  return UpdateBanner(
+                                    currentVersion: localVersion,
+                                    latestVersion: account?.latestVersion,
+                                    updateUrl: account?.updateUrl,
                                   );
                                 },
-                                child: FutureBuilder<String>(
-                                  future: _getAppVersion(),
-                                  builder: (context, snapshot) {
-                                    final version = snapshot.data ?? '';
-                                    final user =
-                                        account?.username ?? username ?? '---';
-                                    return Text(
-                                      'V$version  $user',
-                                      style: const TextStyle(
-                                        color: Colors.grey,
-                                        fontSize: 12,
-                                        decoration: TextDecoration.underline,
-                                      ),
-                                      textDirection: TextDirection.rtl,
-                                      textAlign: TextAlign.center,
-                                    );
-                                  },
-                                ),
                               ),
                             ],
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-        ],
+          ),
+        ),
+        if (vpnConfigs.isEmpty && !hasCachedAccount)
+          Positioned.fill(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 30.0, sigmaY: 30.0),
+              child: Container(
+                color: const Color(0xFF303030).withAlpha(50),
+                child: Stack(
+                  children: [
+                    // Centered ZURTEX content
+                    Center(
+                      child: LoadingProgressWidget(
+                        loadingMessage: loadingMessage,
+                        progressNotifier: progressNotifier,
+                      ),
+                    ),
+                    // Bottom actions
+                    if (loadingMessage == 'خطا در دریافت اطلاعات' ||
+                        loadingMessage == 'اینترنت متصل نیست' ||
+                        loadingMessage == 'اینترنت شما ملی است')
+                      Positioned(
+                        bottom: 20,
+                        left: 0,
+                        right: 0,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Text Buttons Row
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 80,
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  GestureDetector(
+                                    onTap: () {
+                                      launchUrl(
+                                        Uri.parse('https://t.me/AppSupport96'),
+                                        mode: LaunchMode.externalApplication,
+                                      );
+                                    },
+                                    child: const Text(
+                                      'پشتیبانی',
+                                      style: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 13,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                      textDirection: TextDirection.rtl,
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () async {
+                                      //vpnConfigs.clear();
+                                      await initializeVpnConfigs();
+                                    },
+                                    child: const Text(
+                                      'تلاش مجدد',
+                                      style: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 13,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                      textDirection: TextDirection.rtl,
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () {
+                                      launchUrl(
+                                        Uri.parse(
+                                          'https://t.me/ZurtexV2rayApp',
+                                        ),
+                                        mode: LaunchMode.externalApplication,
+                                      );
+                                    },
+                                    child: const Text(
+                                      'کانال تلگرام',
+                                      style: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 13,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                      textDirection: TextDirection.rtl,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            const SizedBox(height: 15),
+
+                            // Version + Username
+                            GestureDetector(
+                              onTap: () {
+                                final usernametoCopy =
+                                    account?.username ?? username;
+                                if (usernametoCopy != null) {
+                                  Clipboard.setData(
+                                    ClipboardData(text: usernametoCopy),
+                                  );
+                                }
+                              },
+                              onLongPress: () async {
+                                // Copy email instead of device ID
+                                final email = await AuthService.getUserEmail();
+                                if (email != null) {
+                                  Clipboard.setData(ClipboardData(text: email));
+                                }
+                              },
+                              child: FutureBuilder<String>(
+                                future: _getAppVersion(),
+                                builder: (context, snapshot) {
+                                  final version = snapshot.data ?? '';
+                                  final user =
+                                      account?.username ?? username ?? '---';
+                                  return Text(
+                                    'V$version  $user',
+                                    style: const TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 12,
+                                      decoration: TextDecoration.none,
+                                    ),
+                                    textDirection: TextDirection.rtl,
+                                    textAlign: TextAlign.center,
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAccountPage() {
+    return Container(
+      color: const Color(0xFF212121),
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Container(
+              padding: const EdgeInsets.all(20),
+              child: const Text(
+                'Account',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Account Info
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  children: [
+                    // Email
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF303030),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Email',
+                            style: TextStyle(color: Colors.grey, fontSize: 14),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            username ?? 'Loading...',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Days Left
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF303030),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Days Remaining',
+                            style: TextStyle(color: Colors.grey, fontSize: 14),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            account?.remainingDays.toString() ?? '---',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Data Left
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF303030),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Data Remaining',
+                            style: TextStyle(color: Colors.grey, fontSize: 14),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${account?.remainingGB.toStringAsFixed(1) ?? '--'} GB',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Subscription Status
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF303030),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Status',
+                            style: TextStyle(color: Colors.grey, fontSize: 14),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            subscriptionStatus == 'active'
+                                ? 'Active'
+                                : subscriptionStatus == 'expired'
+                                ? 'Expired'
+                                : 'Unknown',
+                            style: TextStyle(
+                              color: subscriptionStatus == 'active'
+                                  ? Colors.green
+                                  : subscriptionStatus == 'expired'
+                                  ? Colors.red
+                                  : Colors.orange,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    // Placeholder for renewal button (to be added later)
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

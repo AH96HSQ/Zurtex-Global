@@ -1,40 +1,75 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "com.example.zurtex"
-    compileSdk = 35
+    namespace = "com.zurtex.global"
+    compileSdk = 36
     ndkVersion = "27.0.12077973"
-
+packaging {
+    jniLibs {
+        // Force extracting .so files to /data/app/.../lib/<abi> so runtime can exec them
+        useLegacyPackaging = true
+    }
+}
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.zurtex"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        applicationId = "com.zurtex.global"
         minSdk = flutter.minSdkVersion
-        targetSdk = 35
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    // ✅ Only enable ABI splits for release builds, not debug
+    val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("Release") }
+
+    splits {
+        abi {
+            isEnable = isReleaseBuild
+            if (isReleaseBuild) {
+                reset()
+                include("arm64-v8a", "armeabi-v7a") // adjust if you only ship one ABI
+                isUniversalApk = false
+            }
+        }
+    }
+
+    // --- Load keystore props ---
+    val keystoreProperties = Properties()
+    val keystoreFile = rootProject.file("key.properties")
+    if (keystoreFile.exists()) {
+        keystoreProperties.load(FileInputStream(keystoreFile))
+    }
+
+    signingConfigs {
+        create("release") {
+            if (keystoreFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

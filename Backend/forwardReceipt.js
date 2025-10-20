@@ -5,7 +5,7 @@ import axios from "axios";
 const app = express();
 app.use(bodyParser.json({ limit: '10mb' }));
 
-const MAIN_BACKEND_URL = "http://5.78.94.88:5000/api/receipt";
+const MAIN_BACKEND_URL = "http://5.78.94.88:5005/api/receipt";
 
 app.post("/api/receipt", async (req, res) => {
   const { deviceId, receiptData, gigabyte, durationInDays, price } = req.body;

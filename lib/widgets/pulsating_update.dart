@@ -44,7 +44,7 @@ class _UpdateBannerState extends State<UpdateBanner>
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
 
     _colorAnimation = ColorTween(
-      begin: const Color(0xFF56A6E7),
+      begin: const Color(0xFF9700FF),
       end: Colors.green,
     ).animate(CurvedAnimation(parent: _controller2, curve: Curves.easeInOut));
   }
@@ -52,6 +52,7 @@ class _UpdateBannerState extends State<UpdateBanner>
   @override
   void dispose() {
     _controller.dispose();
+    _controller2.dispose();
     super.dispose();
   }
 
@@ -68,7 +69,10 @@ class _UpdateBannerState extends State<UpdateBanner>
       child: GestureDetector(
         onTap: () {
           if (widget.updateUrl?.isNotEmpty == true) {
-            launchUrl(Uri.parse(widget.updateUrl!));
+            launchUrl(
+              Uri.parse(widget.updateUrl!),
+              mode: LaunchMode.externalApplication,
+            );
           }
         },
         child: AnimatedBuilder(
@@ -80,18 +84,17 @@ class _UpdateBannerState extends State<UpdateBanner>
               height: 65,
               margin: const EdgeInsets.only(bottom: 10),
               decoration: BoxDecoration(
-                color: _colorAnimation.value ?? const Color(0xFF56A6E7),
+                color: _colorAnimation.value ?? const Color(0xFF9700FF),
                 borderRadius: BorderRadius.circular(12),
               ),
               alignment: Alignment.center,
               child: Text(
-                'دانلود نسخه جدید',
+                'Download New Version',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
-                textDirection: TextDirection.rtl,
                 textAlign: TextAlign.center,
               ),
             ),

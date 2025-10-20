@@ -1,17 +1,17 @@
 const Map<String, String> flagToCountry = {
-  '🇩🇪': 'آلمان',
-  '🇫🇮': 'فنلاند',
-  '🇬🇧': 'انگلستان',
-  '🇫🇷': 'فرانسه',
-  '🇳🇱': 'هلند',
-  '🇹🇷': 'ترکیه',
-  '🇸🇬': 'سنگاپور',
-  '🇨🇦': 'کانادا',
-  '🇯🇵': 'ژاپن',
-  '🇮🇷': 'ایران',
-  '🇮🇳': 'هند',
-  '🇦🇪': 'امارات',
-  '🇺🇸': 'آمریکا',
+  '🇩🇪': 'Germany',
+  '🇫🇮': 'Finland',
+  '🇬🇧': 'UK',
+  '🇫🇷': 'France',
+  '🇳🇱': 'Netherlands',
+  '🇹🇷': 'Turkey',
+  '🇸🇬': 'Singapore',
+  '🇨🇦': 'Canada',
+  '🇯🇵': 'Japan',
+  '🇮🇷': 'Iran',
+  '🇮🇳': 'India',
+  '🇦🇪': 'UAE',
+  '🇺🇸': 'USA',
 };
 
 String getServerLabel(String link) {
@@ -21,7 +21,7 @@ String getServerLabel(String link) {
   String raw = Uri.decodeComponent(link.substring(idx + 1)).trim();
   if (raw.contains('📅')) return 'Bad Config';
 
-  if (raw.contains('اضطراری')) return 'اضطراری';
+  if (raw.contains('اضطراری')) return 'Emergency';
 
   final httpMatch = RegExp(r'\(𝗛𝗧𝗧𝗣\+\)').hasMatch(raw);
 
@@ -43,5 +43,5 @@ String getServerLabel(String link) {
     }
   }
 
-  return 'اضطراری';
+  return 'Emergency';
 }

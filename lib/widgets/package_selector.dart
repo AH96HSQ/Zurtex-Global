@@ -67,7 +67,7 @@ class _PackageSelectorState extends State<PackageSelector> {
                   Text(
                     '${formatWithSpaces(selectedDays.toInt() * widget.pricePerDay)} تومان',
                     style: const TextStyle(
-                      color: Color(0xFF56A6E7),
+                      color: Color(0xFF9700FF),
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
                     ),
@@ -85,7 +85,7 @@ class _PackageSelectorState extends State<PackageSelector> {
             showLabels: false,
             enableTooltip: false,
             stepSize: 1,
-            activeColor: Color(0xFF56A6E7), // ← selected range color
+            activeColor: Color(0xFF9700FF), // ← selected range color
             inactiveColor: Color(0xFF444444), // ← unselected range color
             onChanged: (value) {
               setState(() => selectedDays = value);
@@ -115,7 +115,7 @@ class _PackageSelectorState extends State<PackageSelector> {
                   Text(
                     '${formatWithSpaces(selectedGB.toInt() * widget.pricePerGB)} تومان',
                     style: const TextStyle(
-                      color: Color(0xFF56A6E7),
+                      color: Color(0xFF9700FF),
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
                     ),
@@ -133,7 +133,7 @@ class _PackageSelectorState extends State<PackageSelector> {
             showLabels: false,
             enableTooltip: false,
             stepSize: 1,
-            activeColor: Color(0xFF56A6E7), // ← selected range color
+            activeColor: Color(0xFF9700FF), // ← selected range color
             inactiveColor: Color(0xFF444444), // ← unselected range color
             onChanged: (value) {
               setState(() => selectedGB = value);

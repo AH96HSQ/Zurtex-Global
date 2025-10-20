@@ -2,18 +2,28 @@
 
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Base FGS permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+
+    <!-- Granular FGS permissions for Android 14+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:usesCleartextTraffic="true"
-        android:label="zurtex"
-        android:icon="@mipmap/ic_launcher">
+        android:label="Zurtex Global"
+        android:icon="@mipmap/ic_launcher"
+        android:extractNativeLibs="true">
 
+        <!-- Use the plugin service and declare BOTH FGS types -->
         <service
-            android:name="com.v2ray.angel.V2RayVpnService"
+            android:name="com.github.blueboytm.flutter_v2ray.v2ray.services.V2rayVPNService"
             android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="true">
+            android:exported="false"
+            android:foregroundServiceType="dataSync|connectedDevice">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
@@ -28,7 +38,7 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            
+
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />

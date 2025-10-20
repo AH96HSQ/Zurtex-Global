@@ -3,25 +3,38 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/vpn_account.dart';
-import 'vpn_connection.dart';
+import 'app_config.dart';
+import 'auth_service.dart';
 
 class VpnService {
   static int totalAttempts = 1;
   static double step = 360;
 
-  static List<String> domainCandidates = [
-    '45.138.132.39:4000',
-    'zurtexbackend569827.xyz',
-  ];
-
-  static const String backupVpnConfig =
-      'vless://5c686fdf-7df3-4723-ac75-fa225edd8865@45.136.5.30:700?encryption=none&security=none&type=tcp&headerType=http#Emergency%20Zurtex%20Connection';
+  static List<String> get domainCandidates => AppConfig.domainCandidates;
+  static List<String> finalDomainList = [];
 
   static Future<VpnAccount?> getVpnAccount(
-    String deviceId,
     ValueNotifier<double> progressNotifier,
-  ) async {
+    Future<void> Function() resetVpnCallback, {
+    bool onlyCheckFirstDomain = false, // 👈 New optional mode flag
+  }) async {
+    // Get user email from authentication service
+    final email = await AuthService.getUserEmail();
+    if (email == null || email.isEmpty) {
+      debugPrint('❌ No user email found. User must be logged in.');
+      return null;
+    }
+
     final prefs = await SharedPreferences.getInstance();
+
+    final savedDomain = prefs.getString('serversentdomain');
+
+    final Set<String> uniqueDomains = {
+      if (savedDomain != null) savedDomain,
+      ...domainCandidates,
+    };
+    finalDomainList = uniqueDomains.toList();
+
     final Dio dio = Dio(
       BaseOptions(
         connectTimeout: const Duration(seconds: 5),
@@ -34,73 +47,56 @@ class VpnService {
       ),
     );
 
-    totalAttempts = domainCandidates.length * 2;
+    // 👇 Use 1 or all depending on the mode
+    totalAttempts = onlyCheckFirstDomain ? 1 : finalDomainList.length * 2;
     step = 360 / totalAttempts;
     progressNotifier.value = 360;
 
-    for (final domain in domainCandidates) {
-      final url = 'http://$domain/api/subscription';
+    Future<VpnAccount?> tryDomains(String label) async {
+      final domainsToTry = onlyCheckFirstDomain
+          ? [finalDomainList.first] // 👈 Only try first
+          : finalDomainList;
 
-      // 🔹 1. Try direct connection
-      debugPrint('🔍 [Direct] Trying: $url');
-      try {
-        final response = await dio.post(
-          url,
-          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
-          data: {'deviceId': deviceId},
-        );
-
-        if (response.statusCode == 200) {
-          final account = VpnAccount.fromJson(response.data);
-          await prefs.setString('last_working_domain', domain);
-          debugPrint('✅ [Direct] Success from [$domain]');
-          progressNotifier.value = 0;
-          return account;
-        }
-      } catch (e) {
-        debugPrint('❌ [Direct] Failed from [$domain]: $e');
-      }
-
-      progressNotifier.value -= step;
-
-      // 🔹 2. Try with VPN
-      try {
-        debugPrint('🔁 Connecting VPN for [$domain]...');
-        await VpnConnection.connect(backupVpnConfig);
-        await Future.delayed(const Duration(seconds: 3));
-
-        debugPrint('🔍 [VPN] Retrying: $url');
-        final vpnResponse = await dio.post(
-          url,
-          queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
-          data: {'deviceId': deviceId},
-        );
-
-        if (vpnResponse.statusCode == 200) {
-          final account = VpnAccount.fromJson(vpnResponse.data);
-          await prefs.setString('last_working_domain', domain);
-          debugPrint('✅ [VPN] Success from [$domain]');
-          await VpnConnection.disconnect();
-          progressNotifier.value = 0;
-          return account;
-        } else {
-          debugPrint(
-            '❌ [VPN] Failed from [$domain]: ${vpnResponse.statusCode}',
+      for (final domain in domainsToTry) {
+        final url = '$domain/api/subscription';
+        debugPrint('🔍 [$label] Trying: $url');
+        try {
+          final response = await dio.post(
+            url,
+            queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
+            data: {'email': email}, // ✅ Changed from deviceId to email
           );
-        }
-      } catch (e) {
-        debugPrint('❌ [VPN] Exception from [$domain]: $e');
-      } finally {
-        debugPrint('🛑 Disconnecting VPN...');
-        await VpnConnection.disconnect();
-      }
 
-      progressNotifier.value -= step;
-      await Future.delayed(const Duration(seconds: 1));
+          if (response.statusCode == 200) {
+            final account = VpnAccount.fromJson(response.data);
+            await prefs.setString('last_working_domain', domain);
+            debugPrint('✅ [$label] Success from [$domain]');
+            progressNotifier.value = 0;
+            return account;
+          }
+        } catch (e) {
+          debugPrint('❌ [$label] Failed from [$domain]: $e');
+        }
+
+        progressNotifier.value -= step;
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      return null;
     }
 
+    // 🔹 Phase 1
+    final firstTry = await tryDomains('Direct');
+    if (firstTry != null || onlyCheckFirstDomain) return firstTry;
+
+    // 🔹 Phase 2 (skip if only checking first)
+    debugPrint('🔁 Calling resetVpnWithRealConfig...');
+    await resetVpnCallback();
+
+    final secondTry = await tryDomains('AfterVPNReset');
+    if (secondTry != null) return secondTry;
+
     progressNotifier.value = 0;
-    debugPrint('❌❌ All per-domain connection attempts failed.');
+    debugPrint('❌❌ All connection attempts failed.');
     return null;
   }
 }

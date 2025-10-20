@@ -14,10 +14,6 @@ class InfoBox extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF2C2C2C),
-
-        // (double.tryParse(value.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0) < 5
-        // ? Colors.red
-        // : const Color(0xFF2C2C2C),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -31,7 +27,7 @@ class InfoBox extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Text(
-            value,
+            _getSafeValue(value),
             style: const TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.bold,
@@ -47,5 +43,16 @@ class InfoBox extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _getSafeValue(String input) {
+    final hasGB = input.toLowerCase().contains('gb');
+
+    final numericValue =
+        double.tryParse(input.replaceAll(RegExp(r'[^0-9.-]'), '')) ?? 0;
+
+    final result = numericValue < 0 ? '0' : numericValue.toStringAsFixed(0);
+
+    return hasGB ? '$result GB' : result;
   }
 }
