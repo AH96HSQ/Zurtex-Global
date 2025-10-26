@@ -1,7 +1,7 @@
 # Zurtex Global
 
 <p align="center">
-  <img src="assets/images/ZurtexLogoSquare.png" alt="Zurtex Global Logo" width="200"/>
+  <img src="assets/images/logo.png" alt="Zurtex Global Logo" width="200"/>
 </p>
 
 **Zurtex Global** is a free, open-source VPN application designed to provide secure and private internet access. Built with Flutter and powered by the V2Ray protocol, it helps users bypass internet censorship and protect their online privacy.
