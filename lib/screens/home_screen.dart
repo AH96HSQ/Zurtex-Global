@@ -1995,12 +1995,55 @@ class _HomeScreenState extends State<HomeScreen>
                     const SizedBox(height: 16),
                     // Payment Section
                     _buildPaymentSection(),
+                    const SizedBox(height: 16),
+                    // Contact Support Button
+                    _buildContactSupportButton(),
                     const SizedBox(height: 20),
                   ],
                 ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContactSupportButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: () async {
+          final url = Uri.parse('https://t.me/MyAppsSupport96');
+          if (await canLaunchUrl(url)) {
+            await launchUrl(url, mode: LaunchMode.externalApplication);
+          } else {
+            showMyToast(
+              'Could not open Telegram',
+              context,
+              backgroundColor: Colors.red,
+            );
+          }
+        },
+        icon: Image.asset(
+          'assets/images/Telegram.png',
+          width: 24,
+          height: 24,
+        ),
+        label: const Text(
+          'Contact Support',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF0088cc),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
       ),
     );
