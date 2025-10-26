@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:zurtex/services/vpn_connection.dart';
 import 'package:zurtex/services/vpn_service.dart';
 import 'package:zurtex/services/auth_service.dart';
+import 'package:zurtex/services/payment_service.dart';
+import 'package:zurtex/models/payment_order.dart';
 import 'package:zurtex/utils/toast_utils.dart';
 import 'package:zurtex/widgets/loading.dart';
 import 'package:zurtex/widgets/pulsating_update.dart';
@@ -160,6 +162,69 @@ String? getCountryCodeFromLink(String link) {
   return countryLabelToCode[label];
 }
 
+// Map to get English country name from flag emoji
+const Map<String, String> flagToCountryName = {
+  '🇩🇪': 'Germany',
+  '🇺🇸': 'United States',
+  '🇫🇷': 'France',
+  '🇮🇷': 'Iran',
+  '🇨🇦': 'Canada',
+  '🇬🇧': 'United Kingdom',
+  '🇹🇷': 'Turkey',
+  '🇦🇪': 'UAE',
+  '🇯🇵': 'Japan',
+  '🇳🇱': 'Netherlands',
+  '🇮🇹': 'Italy',
+  '🇫🇮': 'Finland',
+  '🇵🇪': 'Peru',
+  '🇷🇺': 'Russia',
+  '🇨🇳': 'China',
+  '🇮🇳': 'India',
+  '🇧🇷': 'Brazil',
+  '🇪🇸': 'Spain',
+  '🇸🇪': 'Sweden',
+  '🇨🇭': 'Switzerland',
+  '🇦🇺': 'Australia',
+  '🇦🇹': 'Austria',
+  '🇸🇬': 'Singapore',
+  '🇰🇷': 'South Korea',
+  '🇰🇿': 'Kazakhstan',
+  '🇺🇦': 'Ukraine',
+  '🇵🇱': 'Poland',
+  '🇦🇷': 'Argentina',
+  '🇲🇽': 'Mexico',
+  '🇸🇦': 'Saudi Arabia',
+  '🇮🇶': 'Iraq',
+  '🇸🇾': 'Syria',
+  '🇶🇦': 'Qatar',
+};
+
+/// Extract clean notification remark (flag + English country name only)
+String getCleanNotificationRemark(String configUrl) {
+  // Get the remark from URL fragment
+  final fragment = configUrl.split('#').length > 1
+      ? configUrl.split('#')[1]
+      : '';
+  final remark = Uri.decodeComponent(fragment);
+
+  // Find flag emoji in remark by checking each character
+  String? foundFlag;
+  for (final entry in flagToCountryName.entries) {
+    if (remark.contains(entry.key)) {
+      foundFlag = entry.key;
+      break;
+    }
+  }
+
+  if (foundFlag != null) {
+    final countryName = flagToCountryName[foundFlag] ?? 'VPN';
+    return '$foundFlag $countryName';
+  }
+
+  // Fallback if no flag found
+  return 'Zurtex VPN';
+}
+
 Widget buildFlag(String? countryCode, {required String link}) {
   final label = Uri.decodeComponent(link.split('#').lastOrNull ?? '');
   final isEmergency = label.contains('اضطراری');
@@ -198,7 +263,7 @@ class _HomeScreenState extends State<HomeScreen>
   int? selectedServerPing;
   bool isFetchingPing = false;
   VpnAccount? account;
-  String loadingMessage = 'در حال دریافت اطلاعات حساب برای این دستگاه';
+  String loadingMessage = 'Loading account information';
   Map<String, int?> serverPings = {}; // link → delay in ms (nullable if failed)
   bool isCheckingConnection = false;
   final LayerLink _layerLink = LayerLink();
@@ -218,6 +283,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool seemsDisconnected = false;
   bool shouldDisconnectAfterUpdate = false;
   String? username;
+  String? email;
   final ValueNotifier<double> progressNotifier = ValueNotifier(360);
   late final String rawLabel;
   late final String staticIranConfig;
@@ -227,6 +293,17 @@ class _HomeScreenState extends State<HomeScreen>
   bool cameFromSaved = false;
   bool isFetchingVpnConfig = false;
   int _selectedPageIndex = 0; // Navigation bar state
+
+  // Payment-related state
+  bool _isPaymentExpanded = false;
+  PaymentOrder? _currentPaymentOrder;
+  List<PaymentPlan> _paymentPlans = [];
+  bool _isLoadingPlans = false;
+  bool _isCreatingPayment = false;
+  String? _planLoadError; // Error message when loading plans fails
+  Timer? _paymentStatusTimer;
+  String? _selectedPlanType; // Track selected plan
+  bool _isRefreshingPayment = false; // Cooldown state for refresh button
 
   @override
   void initState() {
@@ -256,9 +333,15 @@ class _HomeScreenState extends State<HomeScreen>
         username = value;
       });
     });
+    AuthService.getUserEmail().then((value) {
+      setState(() {
+        email = value;
+      });
+    });
     fToast = FToast();
     fToast.init(context);
     initializeVpnConfigs();
+    _loadPaymentData();
   }
 
   Future<void> _initAsyncThings() async {
@@ -561,7 +644,10 @@ class _HomeScreenState extends State<HomeScreen>
       }
       final config = sortedConfigs[i];
 
-      await VpnConnection.connect(config);
+      await VpnConnection.connect(
+        config,
+        customRemark: getCleanNotificationRemark(config),
+      );
 
       await Future.delayed(const Duration(milliseconds: 1000));
 
@@ -957,7 +1043,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       setState(() {
-        loadingMessage = 'اتصال سریع';
+        loadingMessage = 'Quick connect';
       });
 
       VpnAccount? result = await VpnService.getVpnAccount(
@@ -976,19 +1062,19 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       setState(() {
-        loadingMessage = 'بررسی اتصال اینترنت';
+        loadingMessage = 'Checking internet connection';
       });
 
       final pingTimeIran = await checkInternetWithPing(useIranianSite: true);
       if (pingTimeIran == null) {
         setState(() {
-          loadingMessage = 'اینترنت متصل نیست';
+          loadingMessage = 'No internet connection';
           isFetchingVpnConfig = false;
         });
 
         if (hasCachedAccount) {
           showMyToast(
-            "اتصال اینترنت برقرار نیست",
+            "No internet connection",
             context,
             backgroundColor: Colors.red,
           );
@@ -1001,23 +1087,29 @@ class _HomeScreenState extends State<HomeScreen>
       );
       if (pingTimeInternational == null) {
         setState(() {
-          loadingMessage = 'اینترنت شما ملی است';
+          loadingMessage = 'National internet only';
           isFetchingVpnConfig = false;
         });
 
         if (hasCachedAccount) {
-          showMyToast("اینترنت ملی است", context, backgroundColor: Colors.red);
+          showMyToast(
+            "National internet only",
+            context,
+            backgroundColor: Colors.red,
+          );
         }
         return;
       }
 
       setState(() {
-        loadingMessage = 'ارتباط با سرور';
+        loadingMessage = 'Connecting to server';
       });
 
       result = await VpnService.getVpnAccount(progressNotifier, () async {});
 
-      if (result == null) throw Exception('دریافت اطلاعات حساب ناموفق بود');
+      if (result == null) {
+        throw Exception('Failed to fetch account information');
+      }
 
       await _finalizeVpnAccount(result);
       setState(() {
@@ -1028,7 +1120,7 @@ class _HomeScreenState extends State<HomeScreen>
 
       if (hasCachedAccount) {
         showMyToast(
-          "خطا در دریافت اطلاعات",
+          "Error fetching data",
           context,
           backgroundColor: Colors.red,
         );
@@ -1478,6 +1570,10 @@ class _HomeScreenState extends State<HomeScreen>
 
                                         await VpnConnection.connect(
                                           selectedConfig!,
+                                          customRemark:
+                                              getCleanNotificationRemark(
+                                                selectedConfig!,
+                                              ),
                                         );
                                       } catch (e) {
                                         debugPrint("❌ VPN connect failed: $e");
@@ -1643,9 +1739,9 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                     // Bottom actions
-                    if (loadingMessage == 'خطا در دریافت اطلاعات' ||
-                        loadingMessage == 'اینترنت متصل نیست' ||
-                        loadingMessage == 'اینترنت شما ملی است')
+                    if (loadingMessage == 'Error fetching data' ||
+                        loadingMessage == 'No internet connection' ||
+                        loadingMessage == 'National internet only')
                       Positioned(
                         bottom: 20,
                         left: 0,
@@ -1787,9 +1883,9 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
             const SizedBox(height: 20),
-            // Account Info
+            // Account Info - Make scrollable
             Expanded(
-              child: Padding(
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
                   children: [
@@ -1810,7 +1906,7 @@ class _HomeScreenState extends State<HomeScreen>
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            username ?? 'Loading...',
+                            email ?? 'Loading...',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -1820,99 +1916,85 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // Days Left
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF303030),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Days Remaining',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            account?.remainingDays.toString() ?? '---',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
+                    // Days Remaining and Status in one row
+                    Row(
+                      children: [
+                        // Days Remaining
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF303030),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Days Remaining',
+                                  style: TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  account?.remainingDays.toString() ?? '---',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(width: 16),
+                        // Subscription Status
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF303030),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Status',
+                                  style: TextStyle(
+                                    color: Colors.grey,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  subscriptionStatus == 'active'
+                                      ? 'Active'
+                                      : subscriptionStatus == 'expired'
+                                      ? 'Expired'
+                                      : 'Unknown',
+                                  style: TextStyle(
+                                    color: subscriptionStatus == 'active'
+                                        ? Colors.green
+                                        : subscriptionStatus == 'expired'
+                                        ? Colors.red
+                                        : Colors.orange,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 16),
-                    // Data Left
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF303030),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Data Remaining',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '${account?.remainingGB.toStringAsFixed(1) ?? '--'} GB',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    // Subscription Status
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF303030),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Status',
-                            style: TextStyle(color: Colors.grey, fontSize: 14),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            subscriptionStatus == 'active'
-                                ? 'Active'
-                                : subscriptionStatus == 'expired'
-                                ? 'Expired'
-                                : 'Unknown',
-                            style: TextStyle(
-                              color: subscriptionStatus == 'active'
-                                  ? Colors.green
-                                  : subscriptionStatus == 'expired'
-                                  ? Colors.red
-                                  : Colors.orange,
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    // Placeholder for renewal button (to be added later)
+                    // Payment Section
+                    _buildPaymentSection(),
                     const SizedBox(height: 20),
                   ],
                 ),
@@ -1924,8 +2006,733 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  // ==================== PAYMENT METHODS ====================
+
+  Future<void> _loadPaymentData() async {
+    // Load saved payment order
+    final order = await PaymentService.getCurrentPaymentOrder();
+    if (order != null && mounted) {
+      setState(() {
+        _currentPaymentOrder = order;
+      });
+
+      // If payment is pending or confirming, start monitoring
+      if (order.isPending || order.isConfirming) {
+        _startPaymentMonitoring();
+      }
+
+      // If payment is completed, clear it after showing success
+      if (order.isCompleted) {
+        await Future.delayed(const Duration(seconds: 2));
+        await PaymentService.clearCompletedPayment();
+        if (mounted) {
+          setState(() {
+            _currentPaymentOrder = null;
+          });
+        }
+      }
+    }
+
+    // Don't load payment plans on init - load them when user expands the section
+  }
+
+  Future<void> _loadPaymentPlans() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoadingPlans = true;
+      _planLoadError = null;
+    });
+
+    try {
+      final plans = await PaymentService.getPlans();
+      // Filter to only show 30 days and 730 days (2 years)
+      final filteredPlans = plans
+          .where((plan) => plan.type == '30_days' || plan.type == '730_days')
+          .toList();
+
+      if (mounted) {
+        setState(() {
+          _paymentPlans = filteredPlans;
+          _isLoadingPlans = false;
+          _planLoadError = null;
+        });
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading payment plans: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingPlans = false;
+          _planLoadError = 'Connection failed';
+        });
+      }
+    }
+  }
+
+  Future<void> _createPayment(String planType) async {
+    if (!mounted) return;
+
+    setState(() {
+      _isCreatingPayment = true;
+    });
+
+    try {
+      final order = await PaymentService.createPayment(planType);
+      if (mounted) {
+        setState(() {
+          _currentPaymentOrder = order;
+          _isCreatingPayment = false;
+        });
+
+        // Start monitoring payment status
+        _startPaymentMonitoring();
+
+        showMyToast(
+          'Payment order created',
+          context,
+          backgroundColor: Colors.green,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error creating payment: $e');
+      if (mounted) {
+        setState(() {
+          _isCreatingPayment = false;
+        });
+        showMyToast(
+          'Failed to create payment',
+          context,
+          backgroundColor: Colors.red,
+        );
+      }
+    }
+  }
+
+  void _startPaymentMonitoring() {
+    _paymentStatusTimer?.cancel();
+    _paymentStatusTimer = Timer.periodic(const Duration(seconds: 10), (
+      timer,
+    ) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      final order = _currentPaymentOrder;
+      if (order == null) {
+        timer.cancel();
+        return;
+      }
+
+      try {
+        final updatedOrder = await PaymentService.checkPaymentStatus(
+          order.orderId,
+        );
+
+        if (mounted) {
+          setState(() {
+            _currentPaymentOrder = updatedOrder;
+          });
+        }
+
+        // If completed, stop monitoring and refresh account
+        if (updatedOrder.isCompleted) {
+          timer.cancel();
+          if (mounted) {
+            showMyToast(
+              'Payment completed! Your subscription has been activated.',
+              context,
+              backgroundColor: Colors.green,
+            );
+          }
+          // Refresh account data
+          await initializeVpnConfigs();
+
+          // Clear payment after a delay
+          await Future.delayed(const Duration(seconds: 3));
+          await PaymentService.clearCompletedPayment();
+          if (mounted) {
+            setState(() {
+              _currentPaymentOrder = null;
+            });
+          }
+        }
+
+        // If expired, stop monitoring
+        if (updatedOrder.isExpired && updatedOrder.isPending) {
+          timer.cancel();
+          if (mounted) {
+            showMyToast(
+              'Payment expired',
+              context,
+              backgroundColor: Colors.orange,
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error checking payment status: $e');
+      }
+    });
+  }
+
+  Future<void> _cancelPayment() async {
+    await PaymentService.cancelPayment();
+    _paymentStatusTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _currentPaymentOrder = null;
+      });
+      showMyToast('Payment cancelled', context, backgroundColor: Colors.grey);
+    }
+  }
+
+  Widget _buildPaymentSection() {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF303030),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          // Header with expand/collapse button
+          InkWell(
+            onTap: () {
+              setState(() {
+                _isPaymentExpanded = !_isPaymentExpanded;
+              });
+              // Load plans when expanding
+              if (_isPaymentExpanded &&
+                  _paymentPlans.isEmpty &&
+                  !_isLoadingPlans) {
+                _loadPaymentPlans();
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Renew Subscription',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Icon(
+                    _isPaymentExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    color: Colors.white,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Expanded content
+          if (_isPaymentExpanded) ...[
+            const Divider(color: Colors.grey, height: 1),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: _currentPaymentOrder == null
+                  ? _buildPlanSelection()
+                  : _buildPaymentInfo(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlanSelection() {
+    final themeColor = isConnected
+        ? Colors.green
+        : subscriptionStatus == 'expired' || subscriptionStatus == 'unknown'
+        ? Colors.red
+        : const Color(0xFF9700FF);
+
+    if (_isLoadingPlans) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: CircularProgressIndicator(color: themeColor),
+        ),
+      );
+    }
+
+    // Show error with retry button
+    if (_planLoadError != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _planLoadError!,
+                style: const TextStyle(color: Colors.red, fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: _loadPaymentPlans,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: themeColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_paymentPlans.isEmpty) {
+      return const Text(
+        'No payment plans available',
+        style: TextStyle(color: Colors.grey),
+        textAlign: TextAlign.center,
+      );
+    }
+
+    return Column(
+      children: [
+        // Plan options
+        ..._paymentPlans.map((plan) => _buildPlanOption(plan)),
+        const SizedBox(height: 16),
+        // Confirm button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _isCreatingPayment || _selectedPlanType == null
+                ? null
+                : () {
+                    _createPayment(_selectedPlanType!);
+                  },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: themeColor,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: _isCreatingPayment
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : Text(
+                    _selectedPlanType == null ? 'Select a Plan' : 'Confirm',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlanOption(PaymentPlan plan) {
+    final discount = plan.getDiscountPercentage();
+    final originalPrice = plan.getOriginalPrice();
+    final monthlyPrice = plan.getMonthlyPrice();
+    final isSelected = _selectedPlanType == plan.type;
+    final themeColor = isConnected
+        ? Colors.green
+        : subscriptionStatus == 'expired' || subscriptionStatus == 'unknown'
+        ? Colors.red
+        : const Color(0xFF9700FF);
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedPlanType = plan.type;
+        });
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected ? themeColor : const Color(0xFF404040),
+          borderRadius: BorderRadius.circular(8),
+          border: isSelected ? Border.all(color: themeColor, width: 2) : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  plan.getDisplayName(),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                  ),
+                ),
+                if (discount != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.white : Colors.green,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '-${discount.toInt()}%',
+                      style: TextStyle(
+                        color: isSelected ? themeColor : Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (plan.days > 30)
+              Text(
+                '\$${monthlyPrice.toStringAsFixed(2)} per month',
+                style: TextStyle(
+                  color: isSelected
+                      ? Colors.white.withValues(alpha: .9)
+                      : Colors.grey,
+                  fontSize: 14,
+                ),
+              ),
+            if (plan.days > 30) const SizedBox(height: 8),
+            Row(
+              children: [
+                if (originalPrice != null) ...[
+                  Text(
+                    '\$${originalPrice.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 14,
+                      decoration: TextDecoration.lineThrough,
+                      decorationColor: Colors.red,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  '\$${plan.priceUSD.toStringAsFixed(2)} total',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentInfo() {
+    final order = _currentPaymentOrder!;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Order info
+        Text(
+          'Order ID: ${order.orderId.substring(0, 8)}...',
+          style: const TextStyle(color: Colors.grey, fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+
+        // Plan name
+        Text(
+          order.getPlanDisplayName(),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Amount
+        Text(
+          '${order.amount.toStringAsFixed(8)} LTC (\$${order.amountUSD.toStringAsFixed(2)})',
+          style: const TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        const SizedBox(height: 16),
+
+        // Payment address
+        const Text(
+          'Send Litecoin to:',
+          style: TextStyle(color: Colors.grey, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: order.paymentAddress));
+            showMyToast(
+              'Address copied',
+              context,
+              backgroundColor: Colors.green,
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF404040),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    order.paymentAddress,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.copy, color: Colors.white, size: 16),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // QR Code
+        if (order.qrCode.isNotEmpty) ...[
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Image.memory(
+                base64Decode(order.qrCode.split(',').last),
+                key: ValueKey(order.orderId),
+                width: 200,
+                height: 200,
+                gaplessPlayback: true,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // Status
+        Text(
+          order.getStatusMessage(),
+          style: TextStyle(
+            color: order.isCompleted
+                ? Colors.green
+                : order.isConfirming
+                ? Colors.orange
+                : order.isUnderpaid
+                ? Colors.red
+                : Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        if (order.confirmations > 0) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Confirmations: ${order.confirmations}/2',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+        if (order.isUnderpaid && order.amountReceived > 0) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Received: ${order.amountReceived.toStringAsFixed(8)} LTC',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Please contact support for manual processing',
+            style: const TextStyle(color: Colors.orange, fontSize: 12),
+          ),
+        ],
+        if (!order.isExpired && order.isPending) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Expires: ${_formatDateTime(order.expiresAt)}',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+        const SizedBox(height: 16),
+
+        // Refresh button
+        if (!order.isCompleted) ...[
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _isRefreshingPayment
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isRefreshingPayment = true;
+                      });
+
+                      try {
+                        final updatedOrder =
+                            await PaymentService.refreshPaymentStatus(
+                              order.orderId,
+                            );
+                        if (mounted) {
+                          setState(() {
+                            _currentPaymentOrder = updatedOrder;
+                          });
+                          showMyToast(
+                            'Payment status updated',
+                            context,
+                            backgroundColor: Colors.green,
+                          );
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          showMyToast(
+                            'Failed to refresh status',
+                            context,
+                            backgroundColor: Colors.red,
+                          );
+                        }
+                      }
+
+                      // Start 5-second cooldown
+                      Future.delayed(const Duration(seconds: 5), () {
+                        if (mounted) {
+                          setState(() {
+                            _isRefreshingPayment = false;
+                          });
+                        }
+                      });
+                    },
+              icon: const Icon(Icons.refresh),
+              label: const Text('Check Payment Status'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isRefreshingPayment
+                    ? const Color(0xFFBDBDBD) // Light grey (grey[400])
+                    : (isConnected
+                          ? Colors.green
+                          : subscriptionStatus == 'expired' ||
+                                subscriptionStatus == 'unknown'
+                          ? Colors.red
+                          : const Color(0xFF9700FF)),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // Cancel button
+        if (!order.isCompleted && !order.isUnderpaid)
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    backgroundColor: const Color(0xFF303030),
+                    title: const Text(
+                      'Cancel Payment?',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    content: const Text(
+                      'Are you sure you want to cancel this payment order?',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('No'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text(
+                          'Yes, Cancel',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+
+                if (confirm == true) {
+                  await _cancelPayment();
+                }
+              },
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.red),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text(
+                'Cancel Payment',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  String _formatDateTime(DateTime dt) {
+    final now = DateTime.now();
+    final diff = dt.difference(now);
+
+    if (diff.isNegative) return 'Expired';
+
+    if (diff.inHours > 0) {
+      return '${diff.inHours}h ${diff.inMinutes % 60}m';
+    } else {
+      return '${diff.inMinutes}m';
+    }
+  }
+
+  // ==================== END PAYMENT METHODS ====================
+
   @override
   void dispose() {
+    _paymentStatusTimer?.cancel();
     stopConnectionMonitor(); // ✅ clean up
 
     WidgetsBinding.instance.removeObserver(this);

@@ -723,6 +723,44 @@ app.post("/api/subscription", async (req, res) => {
     let remainingBytes = total - usage;
     if (remainingBytes < 0) remainingBytes = 0;
 
+    // ✅ AUTO TOP-UP: If user has less than 5GB remaining, add 5GB
+    const remainingGB = remainingBytes / (1024 * 1024 * 1024);
+    
+    if (status === 'active' && remainingGB < 5) {
+      console.log(`🔄 Auto top-up triggered for ${device.username}: ${remainingGB.toFixed(2)}GB remaining`);
+      
+      try {
+        const topupSuccess = await upgradeVpnUser(device.username, 5, 0); // Add 5GB, 0 days
+        
+        if (topupSuccess) {
+          console.log(`✅ Auto top-up successful: Added 5GB to ${device.username}`);
+          
+          // Refresh VPN info to get updated data
+          vpnInfo = await findVpnUserByUsername(device.username);
+          usage = vpnInfo?.online_info?.usage || 0;
+          total = vpnInfo?.latest_info?.package_size || 0;
+          remainingBytes = total - usage;
+          if (remainingBytes < 0) remainingBytes = 0;
+          
+          // Update device record
+          device.gig_byte = total;
+          await device.save();
+          
+          // Log the auto top-up
+          await Log.create({
+            email,
+            action: 'auto_topup',
+            details: { username: device.username, gigabytesAdded: 5, previousGB: remainingGB },
+            timestamp: new Date(),
+          });
+        } else {
+          console.error(`❌ Auto top-up failed for ${device.username}`);
+        }
+      } catch (topupErr) {
+        console.error(`❌ Auto top-up error for ${device.username}:`, topupErr);
+      }
+    }
+
     const responsePayload = {
       username: device.username,
       test: device.test,
@@ -1402,6 +1440,66 @@ app.post("/api/topup", async (req, res) => {
   } catch (err) {
     console.error("❌ Error in /api/topup:", err);
     return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Payment callback endpoint (called by Litecoin payment gateway)
+app.post('/api/payment-callback', async (req, res) => {
+  try {
+    const { email, orderId, planType, amountLTC, txHash } = req.body;
+
+    console.log('💰 Payment received:', { email, planType, orderId });
+
+    // Find device by email
+    const device = await Device.findOne({ email });
+    
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
+
+    // Calculate days to add based on plan
+    const daysToAdd = parseInt(planType.split('_')[0]);
+    const currentExpiration = device.expiryTime || Math.floor(Date.now() / 1000);
+    const newExpiration = currentExpiration + (daysToAdd * 24 * 60 * 60);
+
+    // Update device subscription with initial 5GB
+    device.expiryTime = newExpiration;
+    device.gig_byte = 5 * 1024 * 1024 * 1024; // 5GB in bytes
+    
+    await device.save();
+
+    // Upgrade VPN user with time + initial 5GB
+    const gigabytes = 5; // Start with 5GB
+    const upgradeSuccess = await upgradeVpnUser(device.username, gigabytes, daysToAdd);
+
+    if (!upgradeSuccess) {
+      console.error('❌ Failed to upgrade VPN user:', device.username);
+    }
+
+    // Log the payment
+    await Log.create({
+      email,
+      action: 'payment_received',
+      details: { orderId, planType, amountLTC, txHash, daysAdded: daysToAdd },
+      timestamp: new Date(),
+    });
+
+    console.log('✅ Subscription activated:', {
+      email,
+      expiresAt: new Date(newExpiration * 1000),
+      plan: planType,
+      initialData: '5GB (auto-top-up enabled)',
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Subscription activated',
+      expiresAt: newExpiration,
+    });
+
+  } catch (error) {
+    console.error('❌ Payment callback error:', error);
+    res.status(500).json({ error: 'Failed to process payment' });
   }
 });
 
