@@ -45,3 +45,8 @@ app.*.map.json
 /android/app/release
 android/key.properties
 *.jks
+
+# Backend sensitive files (contains API keys, passwords, database credentials)
+Backend/.env
+Backend/*.key
+Backend/*.pem

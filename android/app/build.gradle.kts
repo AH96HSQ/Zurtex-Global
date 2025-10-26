@@ -33,17 +33,13 @@ packaging {
         versionName = flutter.versionName
     }
 
-    // ✅ Only enable ABI splits for release builds, not debug
-    val isReleaseBuild = gradle.startParameter.taskNames.any { it.contains("Release") }
-
+    // ABI splits for optimized APKs
     splits {
         abi {
-            isEnable = isReleaseBuild
-            if (isReleaseBuild) {
-                reset()
-                include("arm64-v8a", "armeabi-v7a") // adjust if you only ship one ABI
-                isUniversalApk = false
-            }
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
         }
     }
 
@@ -70,6 +66,11 @@ packaging {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
+            
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
+                debugSymbolLevel = "FULL"
+            }
         }
     }
 }

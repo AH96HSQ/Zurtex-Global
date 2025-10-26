@@ -30,7 +30,7 @@ class VpnConnection {
     if (customRemark != null) {
       // Replace the fragment (part after #) with the custom remark
       modifiedConfigUrl =
-          configUrl.split('#')[0] + '#${Uri.encodeComponent(customRemark)}';
+          '${configUrl.split('#')[0]}#${Uri.encodeComponent(customRemark)}';
     }
 
     final parser = FlutterV2ray.parseFromURL(modifiedConfigUrl);

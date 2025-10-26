@@ -1,0 +1,15 @@
+Zurtex Global is a secure and fast VPN application that uses the V2Ray protocol to provide privacy and freedom on the internet.
+
+Features:
+• V2Ray protocol support (VLESS, VMess)
+• Multiple server locations worldwide
+• Fast and reliable connections
+• Automatic server selection
+• Connection monitoring and statistics
+• Easy-to-use interface
+• Subscription-based access
+• No tracking or logging
+
+Zurtex Global helps you bypass internet censorship and access blocked content while keeping your data secure and private. The app uses modern VPN protocols to ensure your online activities remain anonymous.
+
+Note: This app requires a valid subscription to use VPN services. You can subscribe through the in-app payment system using Litecoin cryptocurrency.
