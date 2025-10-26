@@ -6,8 +6,7 @@
     <!-- Base FGS permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
-    <!-- Granular FGS permissions for Android 14+ -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Granular FGS permission for Android 14+ (VPN = connected device) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -18,12 +17,12 @@
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true">
 
-        <!-- Use the plugin service and declare BOTH FGS types -->
+        <!-- VPN service with connectedDevice type -->
         <service
             android:name="com.github.blueboytm.flutter_v2ray.v2ray.services.V2rayVPNService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
-            android:foregroundServiceType="dataSync|connectedDevice">
+            android:foregroundServiceType="connectedDevice">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
