@@ -2014,28 +2014,22 @@ class _HomeScreenState extends State<HomeScreen>
       width: double.infinity,
       child: ElevatedButton.icon(
         onPressed: () async {
-          final url = Uri.parse('https://t.me/MyAppsSupport96');
-          if (await canLaunchUrl(url)) {
+          try {
+            final url = Uri.parse('https://t.me/MyAppsSupport96');
             await launchUrl(url, mode: LaunchMode.externalApplication);
-          } else {
+          } catch (e) {
+            debugPrint('Error opening Telegram: $e');
             showMyToast(
-              'Could not open Telegram',
+              'Could not open Telegram. Please install Telegram app.',
               context,
               backgroundColor: Colors.red,
             );
           }
         },
-        icon: Image.asset(
-          'assets/images/Telegram.png',
-          width: 24,
-          height: 24,
-        ),
+        icon: Image.asset('assets/images/Telegram.png', width: 24, height: 24),
         label: const Text(
           'Contact Support',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF0088cc),
