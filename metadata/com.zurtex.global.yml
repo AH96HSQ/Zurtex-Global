@@ -1,13 +1,10 @@
-AuthorName: Zurtex
-AuthorEmail: support@zurtex.com
-AuthorWebSite: https://zurtex.com
-
 Categories:
   - Internet
   - Security
-
 License: GPL-3.0-or-later
-
+AuthorName: Zurtex
+AuthorEmail: support@zurtex.com
+AuthorWebSite: https://zurtex.com
 SourceCode: https://github.com/AH96HSQ/Zurtex-Global
 IssueTracker: https://github.com/AH96HSQ/Zurtex-Global/issues
 
@@ -28,14 +25,10 @@ Builds:
       - linux
       - macos
       - windows
-      - web
-    prebuild: |-
-      export PUB_CACHE=$(pwd)/.pub-cache
-      $$flutter$$/bin/flutter config --no-analytics
-      $$flutter$$/bin/flutter pub get
-    build: |-
-      export PUB_CACHE=$(pwd)/.pub-cache
-      $$flutter$$/bin/flutter build apk --release
+    prebuild: "export PUB_CACHE=$(pwd)/.pub-cache\n$$flutter$$/bin/flutter config\
+      \ --no-analytics\n$$flutter$$/bin/flutter pub get"
+    build: "export PUB_CACHE=$(pwd)/.pub-cache\n$$flutter$$/bin/flutter build apk\
+      \ --release"
 
 AutoUpdateMode: None
 UpdateCheckMode: None
