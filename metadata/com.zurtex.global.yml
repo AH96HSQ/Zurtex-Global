@@ -20,8 +20,6 @@ Builds:
     output: build/app/outputs/flutter-apk/app-release.apk
     srclibs:
       - flutter@stable
-      - AndroidLibXrayLite@v25.3.6
-      - badvpn@1.999.130
     rm:
       - ios
       - linux
@@ -31,19 +29,22 @@ Builds:
       - export PUB_CACHE=$(pwd)/.pub-cache
       - export ANDROID_SDK_ROOT=$ANDROID_SDK
       - export ANDROID_NDK=$ANDROID_SDK/ndk/26.0.10792818
-      - cd $$AndroidLibXrayLite$$
+      - git clone --depth 1 --branch v25.3.6 https://github.com/2dust/AndroidLibXrayLite.git ../AndroidLibXrayLite
+      - cd ../AndroidLibXrayLite
       - gomobile init
       - go mod tidy -v
       - gomobile bind -v -androidapi 21 -ldflags='-s -w' ./
-      - mkdir -p ../$$flutter_v2ray$$/android/libs
-      - cp libv2ray.aar ../$$flutter_v2ray$$/android/libs/
-      - cd ../$$badvpn$$
+      - mkdir -p ../flutter_v2ray/android/libs
+      - cp libv2ray.aar ../flutter_v2ray/android/libs/
+      - git clone --depth 1 --branch 1.999.130 https://github.com/ambrop72/badvpn.git ../badvpn
+      - cd ../badvpn
       - mkdir -p build
       - cd build
       - cmake .. -DCMAKE_ANDROID_PLATFORM=android-21 -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake
       - make tun2socks
       - cd ../../
-      - for ABI in arm64-v8a armeabi-v7a x86_64 x86; do ANDROID_ABI_DIR="../$$flutter_v2ray$$/android/src/main/jniLibs/$ABI"; mkdir -p $ANDROID_ABI_DIR; cp $$badvpn$$/build/tun2socks/badvpn-tun2socks $ANDROID_ABI_DIR/libtun2socks.so; done
+      - for ABI in arm64-v8a armeabi-v7a x86_64 x86; do ANDROID_ABI_DIR="../flutter_v2ray/android/src/main/jniLibs/$ABI"; mkdir -p $ANDROID_ABI_DIR; cp badvpn/build/tun2socks/badvpn-tun2socks $ANDROID_ABI_DIR/libtun2socks.so; done
+      - cd "$$original_wd"
       - $$flutter$$/bin/flutter config --no-analytics
       - $$flutter$$/bin/flutter pub get
     scandelete:
