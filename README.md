@@ -78,7 +78,25 @@ The built APK will be at `build/app/outputs/flutter-apk/app-release.apk`
 
 This app requires a backend server for VPN configuration management. The backend source is included in the `Backend/` directory.
 
-**Note**: Sensitive credentials are stored in `Backend/.env` which is not included in the repository. See `Backend/.env.example` for the required environment variables.
+### Using the Default Backend
+
+The app is pre-configured to use the default backend infrastructure. No additional setup is required - the app will work out-of-the-box.
+
+### Self-Hosting the Backend (Advanced)
+
+To use your own VPN infrastructure:
+
+1. Set up your own VPN servers with V2Ray protocol
+2. Configure the backend with your API keys in `Backend/.env` (see `Backend/.env.example`)
+3. Deploy the backend to your server
+4. Update the `.env` file in the app root with your backend URLs:
+   ```env
+   BACKEND_BASE_URL=https://your-backend.example.com
+   BACKEND_BACKUP_URL=https://your-backup.example.com
+   ```
+5. Rebuild the app with `flutter build apk --release`
+
+**Note**: Self-hosting requires your own VPN server infrastructure and API access to a VPN provider.
 
 ## Dependencies
 

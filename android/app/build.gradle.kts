@@ -43,6 +43,21 @@ packaging {
         }
     }
 
+    // Version code scheme for ABI splits (required by F-Droid)
+    androidComponents {
+        onVariants { variant ->
+            variant.outputs.forEach { output ->
+                val abiCode = when (output.filters.find { it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI }?.identifier) {
+                    "armeabi-v7a" -> 1
+                    "arm64-v8a" -> 2
+                    "x86_64" -> 3
+                    else -> 0
+                }
+                output.versionCode.set((flutter.versionCode * 10) + abiCode)
+            }
+        }
+    }
+
     // --- Load keystore props ---
     val keystoreProperties = Properties()
     val keystoreFile = rootProject.file("key.properties")
