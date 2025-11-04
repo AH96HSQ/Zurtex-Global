@@ -20,48 +20,20 @@ Builds:
     output: build/app/outputs/flutter-apk/app-release.apk
     srclibs:
       - flutter@stable
-      - AndroidLibXrayLite@v25.3.6
-      - badvpn@1.999.130
     rm:
       - ios
       - linux
       - macos
       - windows
-    prebuild: |
-      export PUB_CACHE=$(pwd)/.pub-cache
-      export ANDROID_SDK_ROOT=$ANDROID_SDK
-      export ANDROID_NDK=$ANDROID_SDK/ndk/26.0.10792818
-      
-      # Build libv2ray.aar from AndroidLibXrayLite
-      cd $$AndroidLibXrayLite$$
-      gomobile init
-      go mod tidy -v
-      gomobile bind -v -androidapi 21 -ldflags='-s -w' ./
-      
-      # Copy libv2ray.aar to flutter_v2ray android libs
-      mkdir -p ../$$flutter_v2ray$$/android/libs
-      cp libv2ray.aar ../$$flutter_v2ray$$/android/libs/
-      
-      # Build libtun2socks.so from badvpn for each ABI
-      cd ../$$badvpn$$
-      mkdir -p build
-      cd build
-      cmake .. -DCMAKE_ANDROID_PLATFORM=android-21 -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake
-      make tun2socks
-      
-      # Copy libtun2socks.so to flutter_v2ray for each ABI
-      cd ../../
-      for ABI in arm64-v8a armeabi-v7a x86_64 x86; do
-        ANDROID_ABI_DIR="../$$flutter_v2ray$$/android/src/main/jniLibs/$ABI"
-        mkdir -p $ANDROID_ABI_DIR
-        cp $$badvpn$$/build/tun2socks/badvpn-tun2socks $ANDROID_ABI_DIR/libtun2socks.so
-      done
-      
-      # Prepare Flutter build
-      $$flutter$$/bin/flutter config --no-analytics
-      $$flutter$$/bin/flutter pub get
-    build: "export PUB_CACHE=$(pwd)/.pub-cache\n$$flutter$$/bin/flutter build apk\
-      \ --release"
+    prebuild:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter config --no-analytics
+      - $$flutter$$/bin/flutter pub get
+    scandelete:
+      - .pub-cache
+    build:
+      - export PUB_CACHE=$(pwd)/.pub-cache
+      - $$flutter$$/bin/flutter build apk --release
 
 AutoUpdateMode: None
 UpdateCheckMode: None
